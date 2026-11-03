@@ -61,7 +61,7 @@ def _consume_stderr(process: subprocess.Popen[str], lines: queue.Queue[str]) -> 
     while True:
         try:
             chunk = stream.read(4096)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             break
         if not chunk:
             break

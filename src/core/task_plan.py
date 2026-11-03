@@ -7,7 +7,7 @@ app.runtime 的任务循环完成。逐任务配置错误沿用项目惯例：�
 跳过该任务（blocked），不致命。
 
 id 规则：
-- 选填；合法字符集为 a-z、A-Z、0-9、-、_（与远端 alias 一致）；
+- 选填；合法字符集为 a-z、A-Z、0-9、-、_；
 - 非法（类型错误/字符不符）视为无 id：任务照常执行，不可被依赖——
   降级而非拒绝，故不走模型校验，在本模块归一；
 - 与前方任务重复时报错并跳过该任务——若静默降级为"无 id 照常跑"，
@@ -159,9 +159,7 @@ def _is_within(child: str, ancestor: str) -> bool:
         return False
 
 
-def _validate_paths(
-    config: TranscodeTaskConfig, index: int, logger: Logger
-) -> bool:
+def _validate_paths(config: TranscodeTaskConfig, index: int, logger: Logger) -> bool:
     """目录位置关系的跨字段校验；返回 False 表示任务应被拒绝。
 
     - dest_dir 不得等于或位于 source_dir 之内，source_dir 也不得位于

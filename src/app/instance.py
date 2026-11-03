@@ -401,7 +401,7 @@ def terminate_process_tree(
     """终止进程树，不留孤儿进程。
 
     供 ``LifecycleCoordinator`` 在 fast 中止时终止外部同步进程
-    （rsync/rclone 可能派生子进程，只杀直接子进程会留下孤儿）。
+    （FFmpeg 等外部工具可能派生子进程，只杀直接子进程会留下孤儿）。
     """
     try:
         parent = psutil.Process(pid)

@@ -248,7 +248,9 @@ def run_round(app_context, stub_ffmpeg):
 class TestRunTasksOrchestration:
     def test_completed_dependency_runs_dependent(self, tmp_path, run_round):
         first = _passthrough_task(tmp_path / "src-a", tmp_path / "dest-a", id="a")
-        second = _passthrough_task(tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"])
+        second = _passthrough_task(
+            tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"]
+        )
         make_tree(first["source_dir"], {"a.txt": b"alpha"})
         make_tree(second["source_dir"], {"b.txt": b"beta"})
 
@@ -267,7 +269,9 @@ class TestRunTasksOrchestration:
             "ffmpeg_cmd": "ffmpeg {oops}",
             "id": "a",
         }
-        second = _passthrough_task(tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"])
+        second = _passthrough_task(
+            tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"]
+        )
         make_tree(first["source_dir"], {"a.txt": b"alpha"})
         make_tree(second["source_dir"], {"b.txt": b"beta"})
 
@@ -282,7 +286,9 @@ class TestRunTasksOrchestration:
         # 前置任务缺 mode → 装配失败 SKIPPED；依赖链逐级跳过
         first = _passthrough_task(tmp_path / "src-a", tmp_path / "dest-a", id="a")
         del first["mode"]
-        second = _passthrough_task(tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"])
+        second = _passthrough_task(
+            tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"]
+        )
         third = _passthrough_task(tmp_path / "src-c", tmp_path / "dest-c", id="c", depends_on=["b"])
         for task, name in ((second, "b.txt"), (third, "c.txt")):
             make_tree(task["source_dir"], {name: name.encode()})
@@ -295,7 +301,9 @@ class TestRunTasksOrchestration:
         assert snapshot(third["source_dir"]) == {"c.txt": 5}
 
     def test_dependency_on_later_task_blocks_self_only(self, tmp_path, run_round, capture_log):
-        first = _passthrough_task(tmp_path / "src-a", tmp_path / "dest-a", id="a", depends_on=["late"])
+        first = _passthrough_task(
+            tmp_path / "src-a", tmp_path / "dest-a", id="a", depends_on=["late"]
+        )
         second = _passthrough_task(tmp_path / "src-b", tmp_path / "dest-b", id="late")
         make_tree(first["source_dir"], {"a.txt": b"alpha"})
         make_tree(second["source_dir"], {"b.txt": b"beta"})
@@ -346,7 +354,9 @@ class TestRunTasksOrchestration:
             "ffmpeg_cmd": "ffmpeg {oops}",
             "id": "a",
         }
-        second = _passthrough_task(tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"])
+        second = _passthrough_task(
+            tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"]
+        )
         third = _passthrough_task(tmp_path / "src-c", tmp_path / "dest-c")
         make_tree(first["source_dir"], {"a.txt": b"alpha"})
         make_tree(second["source_dir"], {"b.txt": b"beta"})

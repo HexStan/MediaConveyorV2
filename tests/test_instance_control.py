@@ -21,7 +21,7 @@ from src.app.instance import (
     CMD_RUN_ONCE,
     CMD_STOP,
     DEFAULT_INSTANCE_NAME,
-        PHASE_RUNNING,
+    PHASE_RUNNING,
     PHASE_SLEEPING,
     STOP_FAST,
     STOP_GRACEFUL,

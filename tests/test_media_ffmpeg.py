@@ -67,9 +67,7 @@ class TestRunFFmpeg:
     def test_progress_lines_throttled(self, stub_ffmpeg, capture_log):
         _calls, state = stub_ffmpeg
         # 两条进度行 + 一条非进度行：5 秒节流下只应有首条进度行入日志
-        state["output"] = (
-            b"time=00:00:01.00 speed=1.0x\r\ntime=00:00:02.00 speed=1.0x\r\nother\r\n"
-        )
+        state["output"] = b"time=00:00:01.00 speed=1.0x\r\ntime=00:00:02.00 speed=1.0x\r\nother\r\n"
 
         coordinator = LifecycleCoordinator()
         run_ffmpeg("ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=coordinator)

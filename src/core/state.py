@@ -129,7 +129,9 @@ class StateManager:
         self._conn.commit()
         return self.get_ffmpeg_failure_count(key, filepath)
 
-    def mark_success(self, key: str, filepath: str, timestamp: float, size: int, mtime: float) -> None:
+    def mark_success(
+        self, key: str, filepath: str, timestamp: float, size: int, mtime: float
+    ) -> None:
         """记录成功处理：写时间戳与源文件 size/mtime，双失败计数清零。"""
         self._conn.execute(
             "INSERT INTO file_state (task_key, filepath, success_time, failure_count,"

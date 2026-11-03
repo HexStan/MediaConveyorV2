@@ -46,7 +46,9 @@ _DURATION_TOKEN = re.compile(r"\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]*)\s*")
 
 # 码率令牌：数字 + 可选十进制词头 + 可选 bps/ps/b 后缀（"500K"、"1Mbps"、
 # "1000bps"、"1MB" 均可；大小写不敏感）
-_BITRATE_SHAPE = re.compile(r"\s*(\d+(?:\.\d+)?)\s*([kmgtpKMGTP]?)\s*(?:bps|ps|b)?\s*", re.IGNORECASE)
+_BITRATE_SHAPE = re.compile(
+    r"\s*(\d+(?:\.\d+)?)\s*([kmgtpKMGTP]?)\s*(?:bps|ps|b)?\s*", re.IGNORECASE
+)
 
 _BITRATE_MULTIPLIERS: dict[str, float] = {
     "": 1.0,

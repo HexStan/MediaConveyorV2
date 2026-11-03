@@ -163,9 +163,7 @@ def cmd_start(quiet: bool = False) -> None:
             sys.exit(1)
         return
 
-    print(
-        f"实例已在后台启动，本终端可随时退出。如要停止运行请执行 {_command_hint()} stop。"
-    )
+    print(f"实例已在后台启动，本终端可随时退出。如要停止运行请执行 {_command_hint()} stop。")
     print("正在滚动显示运行日志……\n")
     _follow_logs()
 

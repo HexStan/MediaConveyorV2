@@ -85,7 +85,9 @@ class TestTranscode:
         )
         assert f'"{os.path.join(task["dest_dir"], "a")}-encoded.mp4"' in calls[0]
         # 状态库记录成功与源文件快照
-        success = state().get_success_state(key_of(task), file_key(os.path.join(task["source_dir"], "a.mp4")))
+        success = state().get_success_state(
+            key_of(task), file_key(os.path.join(task["source_dir"], "a.mp4"))
+        )
         assert success is not None
         assert success.source_size == 5
         assert handler.stats.processed == 1
@@ -126,7 +128,12 @@ class TestTranscode:
         ctx = AppContext.get()
         assert ctx.logger.has("error", "命令模板无效")
         # 配置级错误不算文件失败
-        assert state().get_failure_count(key_of(task), file_key(os.path.join(task["source_dir"], "a.mp4"))) == 0
+        assert (
+            state().get_failure_count(
+                key_of(task), file_key(os.path.join(task["source_dir"], "a.mp4"))
+            )
+            == 0
+        )
 
 
 # ============================================================
@@ -142,7 +149,12 @@ class TestDisposition:
         run_task(task, now=NOW)
 
         assert snapshot(task["source_dir"]) == {}
-        assert state().get_success_state(key_of(task), file_key(os.path.join(task["source_dir"], "a.mp4"))) is not None
+        assert (
+            state().get_success_state(
+                key_of(task), file_key(os.path.join(task["source_dir"], "a.mp4"))
+            )
+            is not None
+        )
 
     def test_remove_source_delayed(self, run_task, tmp_path, stub_ffmpeg):
         task = transcode_task(
@@ -389,7 +401,9 @@ class TestExpiredCleanup:
 
         assert snapshot(task["source_dir"]) == {"a.mp4": 5}
 
-    def test_vanished_expired_file_record_cleaned(self, run_task, app_context, tmp_path, stub_ffmpeg):
+    def test_vanished_expired_file_record_cleaned(
+        self, run_task, app_context, tmp_path, stub_ffmpeg
+    ):
         """扫描与删除之间文件消失（竞态）：清记录、不报错（白盒驱动清理步骤）。"""
         task = transcode_task(
             tmp_path / "src", tmp_path / "dest", remove_source=True, source_expired_minutes=1
@@ -402,9 +416,7 @@ class TestExpiredCleanup:
         handler = run_task(task, now=NOW)
         assert handler is not None
         # 模拟"扫描时文件还在、删除时已消失"的竞态窗口
-        handler._cleanup_expired(
-            app_context, [( "a.mp4", filepath, file_key(filepath))]
-        )
+        handler._cleanup_expired(app_context, [("a.mp4", filepath, file_key(filepath))])
 
         assert state().get_success_state(key_of(task), file_key(filepath)) is None
         assert not app_context.logger.has("error", "删除过期源文件失败")
@@ -463,7 +475,9 @@ class TestScanFiltering:
 
         monkeypatch.setattr("src.core.media.probe.subprocess.run", fake_run)
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", filter={"duration": {"min": "60s"}})
+        task = transcode_task(
+            tmp_path / "src", tmp_path / "dest", filter={"duration": {"min": "60s"}}
+        )
         make_tree(task["source_dir"], {"short.mp4": b"a", "b.mp4": b"b"})
 
         handler = run_task(task, now=NOW)
@@ -515,9 +529,7 @@ class TestStabilityAndStop:
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
         sizes = iter([100, 200])
-        monkeypatch.setattr(
-            "src.core.handlers.transcode.os.path.getsize", lambda path: next(sizes)
-        )
+        monkeypatch.setattr("src.core.handlers.transcode.os.path.getsize", lambda path: next(sizes))
 
         handler = run_task(task, now=NOW)
 
@@ -561,7 +573,9 @@ class TestStabilityAndStop:
 
 
 class TestTaskIsolation:
-    def test_overlapping_source_dirs_do_not_pollute_each_other(self, run_task, tmp_path, stub_ffmpeg):
+    def test_overlapping_source_dirs_do_not_pollute_each_other(
+        self, run_task, tmp_path, stub_ffmpeg
+    ):
         calls, _fstate = stub_ffmpeg
         task_a = transcode_task(tmp_path / "src", tmp_path / "dest-a")
         task_b = transcode_task(tmp_path / "src", tmp_path / "dest-b")

@@ -150,16 +150,14 @@ preset = "strict"
 #    `from __future__ import annotations`（PEP 649 惰性注解下无必要）；
 #    覆写方法一律加 @override。
 # 2. 配置经 Pydantic 模型在加载期校验：任务模型（src/core/task_config）、
-#    全局段（src/app/config 的 GlobalConfig / BootstrapConfig / ScheduleConfig）、
-#    远端条目（src/remote/factory.py、src/ssh/remotes.py，共享字段类型见
-#    src/validation.py）。模型层之外不建 TypedDict；tomllib 的原始读取边界
+#    全局段（src/app/config 的 GlobalConfig / BootstrapConfig / ScheduleConfig）。
+#    模型层之外不建 TypedDict；tomllib 的原始读取边界
 #    （ConfigManager.load_toml 返回值、bootstrap 前的 raw_config）仍注解为
 #    dict[str, Any]，模型只在该边界之后接管。
 # 3. 日志接口是 src/output/logger.py 的 Logger 协议（结构化）：参数注解用
 #    Logger 而非具体类，测试替身（CaptureLogger 等）结构兼容即可注入。
 # 4. 类型级依赖不构成分层违规：仅为注解服务的 import 放在 TYPE_CHECKING 下
-#    （如 remote/server.py 引用 app.shutdown、app/context.py 引用 core.history），
-#    运行时导入图不变。
+#    （如 app/context.py 引用 core.state），运行时导入图不变。
 
 [tool.pyrefly.errors]
 # 按需追加错误码的 severity 覆盖；保持空表意味着全部跟随 strict 预设。

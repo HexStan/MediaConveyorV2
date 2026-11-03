@@ -10,7 +10,7 @@
 信号由 ``src.app.instance.ControlWatcher`` 从控制文件读入后注入，Docker /
 systemd 停服的 SIGTERM 由 ``install_sigterm_fast_stop`` 接入同一条 fast 链路；
 业务循环在文件/任务边界查询，``fs.transfer`` 的复制循环在 chunk 边界查询
-fast 中止。sync 模式的外部同步进程在启动时登记，fast 中止时被整树终止，
+fast 中止。外部子进程（FFmpeg 转码）在启动时登记，fast 中止时被整树终止，
 不留孤儿。
 
 协调器同时维护实例调度相位（``PHASE_*``，进程内权威源）：``run-once``
@@ -148,7 +148,7 @@ class LifecycleCoordinator:
             self._wake_event.clear()
         return woken
 
-    # ---- 外部同步进程登记（sync 模式） ------------------------------
+    # ---- 外部子进程登记（FFmpeg 转码） ------------------------------
 
     def register_process(self, process: subprocess.Popen[Any]) -> None:
         with self._lock:

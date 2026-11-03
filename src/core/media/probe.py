@@ -106,7 +106,9 @@ def get_media_info(filepath: str, logger: Logger) -> MediaInfo:
         filepath,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT, check=False)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT, check=False
+        )
         if result.returncode == 0:
             data = json.loads(result.stdout)
 

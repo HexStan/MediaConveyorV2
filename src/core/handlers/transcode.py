@@ -173,8 +173,7 @@ class TranscodeHandler(BaseTaskHandler):
 
                 if not self._filter.check_mtime(stat.st_mtime, now):
                     ctx.logger.debug(
-                        f"跳过 {rel_path}，原因: 文件修改时间未满"
-                        f" {config.filter.file_mtime:g} 秒"
+                        f"跳过 {rel_path}，原因: 文件修改时间未满 {config.filter.file_mtime:g} 秒"
                     )
                     continue
 
@@ -255,7 +254,7 @@ class TranscodeHandler(BaseTaskHandler):
                 self._passthrough(ctx, entry)
             else:
                 self._transcode(ctx, entry)
-        except (TransferAbortedError, TemplateFormatError):
+        except TransferAbortedError, TemplateFormatError:
             # fast 停止向上传播以中止本轮任务；命令模板错误属配置级错误，
             # 由 _execute 统一处理（不烧失败计数）
             raise
@@ -417,9 +416,7 @@ class TranscodeHandler(BaseTaskHandler):
                 bak_filepath = os.path.join(bak_dir, filename)
                 try:
                     ensure_dir(bak_dir)
-                    ctx.logger.debug(
-                        f"移动源文件到备份目录: {entry.filepath} -> {bak_filepath}"
-                    )
+                    ctx.logger.debug(f"移动源文件到备份目录: {entry.filepath} -> {bak_filepath}")
                     move_file(entry.filepath, bak_filepath)
                 except TransferAbortedError:
                     raise

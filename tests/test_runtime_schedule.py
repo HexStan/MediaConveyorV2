@@ -76,7 +76,7 @@ def start_schedule(app_context, tmp_path, task, schedule_config):
     if "cron_expr" in schedule_config:
         schedule_lines.append(f'cron_expr = "{schedule_config["cron_expr"]}"')
     if "interval_seconds" in schedule_config:
-        schedule_lines.append(f'interval_seconds = {schedule_config["interval_seconds"]}')
+        schedule_lines.append(f"interval_seconds = {schedule_config['interval_seconds']}")
     config_path.write_text(
         "\n".join(schedule_lines)
         + "\n\n[[tasks]]\n"

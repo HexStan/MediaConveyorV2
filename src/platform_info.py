@@ -20,7 +20,7 @@ class Platform(Enum):
     """运行平台三分类。
 
     POSIX 涵盖 Linux 及其他非 macOS 的 POSIX 系统（freebsd 等），
-    业务上按 Linux 族处理（均有系统 rsync 等）。
+    业务上按 Linux 族处理。
     """
 
     WINDOWS = "windows"  # sys.platform == "win32"
