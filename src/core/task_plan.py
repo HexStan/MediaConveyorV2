@@ -20,11 +20,12 @@ depends_on 规则：
   报错并跳过该任务（配置顺序即执行顺序，依赖只是门禁）。
 """
 
+import os
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from pydantic import ValidationError
 
-from src.core.task_config import TASK_MODELS, TaskConfig
+from src.core.task_config import TASK_MODELS, TaskConfig, TranscodeTaskConfig
 from src.validation import ALIAS_PATTERN, format_validation_error
 
 if TYPE_CHECKING:
@@ -141,6 +142,53 @@ def _dispatch_mode(entry: dict[str, Any], index: int, logger: Logger) -> type[Ta
     return model_cls
 
 
+def _norm_path(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _is_within(child: str, ancestor: str) -> bool:
+    """child 路径是否等于或位于 ancestor 之内（大小写/分隔符归一后判定）。"""
+    child_path = _norm_path(child)
+    ancestor_path = _norm_path(ancestor)
+    if child_path == ancestor_path:
+        return True
+    try:
+        return os.path.commonpath([child_path, ancestor_path]) == ancestor_path
+    except ValueError:
+        # 不同盘符（Windows）等无公共祖先的情形
+        return False
+
+
+def _validate_paths(
+    config: TranscodeTaskConfig, index: int, logger: Logger
+) -> bool:
+    """目录位置关系的跨字段校验；返回 False 表示任务应被拒绝。
+
+    - dest_dir 不得等于或位于 source_dir 之内，source_dir 也不得位于
+      dest_dir 之内：转码输出写入扫描树会形成"输出再被扫描"的反馈回路；
+    - backup_dir 不得位于 source_dir/dest_dir 之内：成功善后的移动/清理
+      会与备份目录互相破坏。
+    """
+    if _is_within(config.dest_dir, config.source_dir) or _is_within(
+        config.source_dir, config.dest_dir
+    ):
+        logger.error(
+            f"任务 #{index + 1} 的 dest_dir 与 source_dir 不得相同或存在嵌套关系，跳过该任务。"
+        )
+        return False
+
+    if config.backup_dir and (
+        _is_within(config.backup_dir, config.source_dir)
+        or _is_within(config.backup_dir, config.dest_dir)
+    ):
+        logger.error(
+            f"任务 #{index + 1} 的 backup_dir 不得位于 source_dir 或 dest_dir 之内，跳过该任务。"
+        )
+        return False
+
+    return True
+
+
 def resolve_tasks(
     raw_tasks: list[Any],
     *,
@@ -193,6 +241,15 @@ def resolve_tasks(
             logger.error(f"任务 #{index + 1} 配置无效，跳过该任务：{format_validation_error(e)}")
             drafts.append(TaskSpec(None))
             continue
+
+        if isinstance(config, TranscodeTaskConfig):
+            if not _validate_paths(config, index, logger):
+                drafts.append(TaskSpec(None))
+                continue
+            if config.remove_source and config.backup_dir:
+                logger.warning(
+                    f"任务 #{index + 1} 配置了 remove_source = true，backup_dir 将被忽略。"
+                )
 
         drafts.append(TaskSpec(config, task_id, depends_on))
 

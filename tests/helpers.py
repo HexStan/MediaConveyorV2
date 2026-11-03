@@ -28,6 +28,7 @@ def make_tree(root, files, default_mtime=OLD):
         str: root 的字符串形式。
     """
     root = str(root)
+    os.makedirs(root, exist_ok=True)
     for rel, spec in files.items():
         if isinstance(spec, tuple):
             content, mtime = spec

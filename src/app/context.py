@@ -1,4 +1,4 @@
-"""应用上下文：通过模块级单例解耦 Logger 等运行期单件的传递"""
+"""应用上下文：通过模块级单例解耦 Logger、StateManager 等运行期单件的传递"""
 
 from typing import TYPE_CHECKING
 
@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     # 类型级依赖（运行时零导入）：core 包的 __init__ 会级联注册 handlers，
     # handlers.base 反向依赖本模块，运行时导入会造成循环
     from src.app.config import GlobalConfig
+    from src.core.state import StateManager
     from src.core.task_plan import TaskSpec
     from src.output.logger import Logger
 
@@ -21,9 +22,10 @@ class AppContext:
         logger: Logger,
         config: GlobalConfig,
         tasks: list[TaskSpec] | None = None,
+        state: StateManager | None = None,
         instance_name: str = "",
     ) -> None:
-        cls._instance = cls(logger, config, tasks, instance_name)
+        cls._instance = cls(logger, config, tasks, state, instance_name)
 
     @classmethod
     def get(cls) -> AppContext:
@@ -36,6 +38,7 @@ class AppContext:
         logger: Logger,
         config: GlobalConfig,
         tasks: list[TaskSpec] | None = None,
+        state: StateManager | None = None,
         instance_name: str = "",
     ) -> None:
         self.logger = logger
@@ -43,11 +46,21 @@ class AppContext:
         self.config = config
         # 加载期解析完成的任务编排信息（config=None 表示被拒绝的任务）
         self.tasks: list[TaskSpec] = tasks if tasks is not None else []
+        # 文件处理状态库（SQLite）：防重复处理 / 失败计数 / fallback 切换。
+        # 生产装配必传入；允许 None 仅为兼容未接入状态库的最小测试装配，
+        # 业务处理器应通过 require_state() 取用
+        self.state = state
         # 实例标识名：锁文件 / 控制文件 / PID 文件 / 日志前缀的公共基名
         self.instance_name = instance_name
         # 生命周期协调器：ControlWatcher 注入停止与 run-once 指令，
         # 业务循环在边界查询
         self.lifecycle = LifecycleCoordinator()
+
+    def require_state(self) -> StateManager:
+        """取状态库；未装配时给出明确错误（而非散落各处的 None 解引用）。"""
+        if self.state is None:
+            raise RuntimeError("AppContext 未装配 StateManager（AppContext.init 缺少 state 参数）")
+        return self.state
 
     def update_config(self, config: GlobalConfig, tasks: list[TaskSpec]) -> None:
         self.config = config

@@ -81,6 +81,7 @@ class BootstrapConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     log_dir: str = "./logs"
+    data_dir: str = "./data"
     max_log_files: int = Field(default=0, ge=0)
     log_level: str = "INFO"
 

@@ -49,7 +49,8 @@ class LifecycleCoordinator:
         self._phase = PHASE_STARTING
         # 最近一次受理的 run-once 指令时间戳（受理回执，随状态文件持久化）
         self._run_once_accepted_ts: float | None = None
-        self._children: list[subprocess.Popen[str]] = []
+        # 外部子进程（二进制管道）：协调器只消费 .pid，泛型参数不限定编解码形态
+        self._children: list[subprocess.Popen[Any]] = []
 
     # ---- 调度相位（调度循环更新） ------------------------------------
 
@@ -149,11 +150,11 @@ class LifecycleCoordinator:
 
     # ---- 外部同步进程登记（sync 模式） ------------------------------
 
-    def register_process(self, process: subprocess.Popen[str]) -> None:
+    def register_process(self, process: subprocess.Popen[Any]) -> None:
         with self._lock:
             self._children.append(process)
 
-    def unregister_process(self, process: subprocess.Popen[str]) -> None:
+    def unregister_process(self, process: subprocess.Popen[Any]) -> None:
         with self._lock:
             if process in self._children:
                 self._children.remove(process)

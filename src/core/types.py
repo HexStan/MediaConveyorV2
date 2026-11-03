@@ -20,3 +20,56 @@ class TaskOutcome(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+
+class TranscodeStats:
+    """单轮转码任务的统计（print_task_summary 的数据源）。"""
+
+    def __init__(self) -> None:
+        self._processed = 0
+        self._passthrough = 0
+        self._failed = 0
+        self._skipped = 0
+        self._expired = 0
+        self._total_bytes = 0
+
+    @property
+    def processed(self) -> int:
+        return self._processed
+
+    @property
+    def passthrough(self) -> int:
+        return self._passthrough
+
+    @property
+    def failed(self) -> int:
+        return self._failed
+
+    @property
+    def skipped(self) -> int:
+        return self._skipped
+
+    @property
+    def expired(self) -> int:
+        return self._expired
+
+    @property
+    def total_bytes(self) -> int:
+        return self._total_bytes
+
+    def record_processed(self, size_bytes: int = 0) -> None:
+        self._processed += 1
+        self._total_bytes += size_bytes
+
+    def record_passthrough(self, size_bytes: int = 0) -> None:
+        self._passthrough += 1
+        self._total_bytes += size_bytes
+
+    def record_failed(self) -> None:
+        self._failed += 1
+
+    def record_skipped(self) -> None:
+        self._skipped += 1
+
+    def record_expired(self) -> None:
+        self._expired += 1

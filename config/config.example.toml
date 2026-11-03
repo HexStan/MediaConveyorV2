@@ -1,227 +1,173 @@
-# ==================================================
-# SmartArchiver 客户端示例配置
-# 本文件仅列出各配置项的中文含义、允许填写范围与默认值；
-# 行为细节、规则语法与完整教程见 README「配置向导」。
-# 用法：复制本文件为 config/config.toml 后按需修改。
-# ==================================================
+# MediaConveyor 示例配置
+#
+# 使用方法：复制本文件为 config/config.toml，按需修改。
+# 各配置项的完整说明见 README.md 的配置向导。
 
-# --------------------------------------------------
-# 全局基础配置
-# --------------------------------------------------
+# ============================================================
+# 基础配置
+# ============================================================
 
-# 【选填】实例标识名：锁文件、控制文件、日志文件共用此名；多实例并行时须互不相同
-# 范围：仅填名称（不带路径/后缀）；缺省或非法时使用默认标识 smartarchiver
-# instance_name = "smartarchiver"
+# 【选填】实例标识名：锁文件、控制文件与日志前缀的公共基名。
+# 范围：仅填名称（不带路径/后缀）；缺省或非法时使用默认标识 mediaconveyor
+# instance_name = "mediaconveyor"
 
-# 【选填】单文件操作失败的最大重试次数；默认 3
-# 范围：≥ 0 的整数
-# max_retries = 3
-
-# 【选填】日志文件存储目录；默认 "./logs"
+# 【选填】日志目录（相对路径以程序所在目录为基准）；默认 ./logs
 # log_dir = "./logs"
 
-# 【选填】日志级别；默认 "INFO"
-# 范围："DEBUG" / "INFO" / "SUCCESS" / "WARNING" / "ERROR" / "CRITICAL"
+# 【选填】状态数据库目录（SQLite，记录处理状态与失败计数）；默认 ./data
+# data_dir = "./data"
+
+# 【选填】最多保留 N 天的日志文件；0 表示不清理。默认 0
+# max_log_files = 7
+
+# 【选填】日志级别：DEBUG（详细）/ INFO（常规）/ WARNING / ERROR / CRITICAL。默认 INFO
 # log_level = "INFO"
 
-# 【选填】保留的日志文件数量，0 表示不清理；默认 0
-# 范围：≥ 0 的整数
-# max_log_files = 30
-
-# --------------------------------------------------
-# 定时调度（可选；不配置则执行完所有任务后退出）
-# --------------------------------------------------
+# ============================================================
+# 调度配置（可选）
+# ============================================================
+# 省略整个 [schedule] 节 = 一次性运行：扫描处理一轮后退出（适合 cron 触发）。
+# 配置了 [schedule] 则常驻运行，按周期自动扫描。
 
 [schedule]
-
-# 【选填】定时模式；范围："cron" / "interval"
+# 定时模式：interval（固定间隔）/ cron（cron 表达式）
 mode = "interval"
 
-# 【interval 模式必填】每次执行完后等待的秒数；范围：> 0
-interval_seconds = 3600
+# interval 模式：扫描间隔（秒）
+interval_seconds = 60
 
-# 【cron 模式必填】cron 表达式，如 "0 0 * * *"（每天 0 点）
-cron_expr = "0 0 * * *"
+# cron 模式：cron 表达式（5 段），例如每小时第 0 分钟执行
+# mode = "cron"
+# cron_expr = "0 * * * *"
 
-# first_run_delay：【选填】启动后首次执行延迟（秒），仅配置了 mode 时生效；默认 -1
-#   范围：-1（等到下个调度点）/ 0（立即）/ 正数（等待 N 秒）
-# first_run_delay = -1
+# 【选填】首轮延迟（秒）：-1（默认）等待至下个调度时间点；0 启动后立即执行；
+# 正数等待指定秒数后执行首轮
+# first_run_delay = 0
 
-# --------------------------------------------------
-# HTTP 远端（可选）：把其他 SmartArchiver 服务器的目录作为任务目标
-# --------------------------------------------------
+# ============================================================
+# 任务
+# ============================================================
+# 每个 [[tasks]] 节定义一个监听与转码任务，紧邻的 [tasks.filter] 是它的过滤条件。
 
-[[http_remotes]]
-
-# 【必填】远端别名，供 dest 引用；范围：a-z、A-Z、0-9、-、_
-alias = "my_nas"
-
-# 【必填】服务器地址，如 "http://192.168.10.10:13579"，也可为反向代理后的 HTTPS 域名
-address = "http://192.168.10.10:13579"
-
-# 【必填】与服务器 api_key 一致的鉴权密钥
-key = "your_api_key"
-
-# 【选填】HTTP 请求超时秒数；默认 14400（4 小时）；范围：≥ 0
-# timeout = 14400
-
-# 【选填】服务器繁忙时最多排队秒数，0 表示不排队直接放弃；默认 0；范围：≥ 0
-# queue_time = 120
-
-# dest 引用远端的写法：{http:别名}?远端路径
-# 如 dest = "{http:my_nas}?/vol/1000/backup"
-
-# --------------------------------------------------
-# SSH 远端（可选，仅 sync 模式支持）：把 SSH 主机的目录作为同步目标
-# --------------------------------------------------
-
-[[ssh_remotes]]
-
-# 【必填】远端别名；范围：a-z、A-Z、0-9、-、_（与 HTTP 远端命名空间隔离，允许重名）
-alias = "my_vps"
-
-# 【必填】SSH 服务器地址
-host = "192.168.1.100"
-
-# 【必填】SSH 用户名
-user = "root"
-
-# 【选填】SSH 端口；默认 22；范围：1-65535 的整数
-# port = 22
-
-# 【选填】SSH 私钥路径（公钥认证）
-# key_file = "/root/.ssh/id_ed25519"
-
-# 【选填】明文密码文件路径（密码认证，文件内容为单行密码）
-# password_file = "/root/.ssh/pass"
-
-# dest 引用远端的写法：{ssh:别名}?远端 POSIX 绝对路径
-# 如 dest = "{ssh:my_vps}?/data"
-
-# --------------------------------------------------
-# 任务列表（[[tasks]] 数组，配置顺序即执行顺序）
-# --------------------------------------------------
-
-# ---- move / copy 模式：移动/复制文件到目标目录 ----
 [[tasks]]
+# 【必填】任务模式：transcode（FFmpeg 转码）
+mode = "transcode"
 
-# 【选填】任务唯一标识，供其他任务的 depends_on 引用
-#  范围：a-z、A-Z、0-9、-、_，须在所有任务中唯一，不填则不能被依赖
-# id = "task-1"
+# 【选填】任务标识：供其他任务的 depends_on 引用（a-z、A-Z、0-9、-、_）
+# id = "anime"
 
-# 【选填】任务名称，仅用于日志展示
-# name = "Task 1"
+# 【选填】任务名称，用于日志标识；缺省为"任务 N"
+name = "视频转码"
 
-# 【必填】任务执行模式；范围："move" / "copy"（在当前配置组合下）
-mode = "move"
+# 【必填】源目录：监听并扫描其中的音视频文件（递归子目录）
+source_dir = "./source"
 
-# 【必填】源目录路径
-source = "./source"
+# 【必填】目标目录：转码输出目录（保持源目录的子目录结构）
+dest_dir = "./dest"
 
-# 【选填】源目录静默期（秒），目录仍在写入时整任务跳过；
-#  范围：≥ 0，0 或缺省不启用
-# source_quiet_seconds = 300
+# 【必填】FFmpeg 命令模板：
+# - {input} → 源文件完整路径；{output} → 目标目录下的基础文件名（不含扩展名），
+#   输出扩展名由模板决定（示例为 -encoded.mp4）；
+# - 支持多行书写（执行时自动合并为单行）；路径要加引号；
+# - 命令中不能出现 {input}/{output} 之外的花括号占位符。
+ffmpeg_cmd = """
+ffmpeg -y \
+  -i "{input}" \
+  -c:v libx264 \
+  -preset fast \
+  -crf 23 \
+  "{output}-encoded.mp4"
+"""
 
-# 【选填】目标目录路径；缺省时不传输文件，仅 delete_rules 有实际效果
-# dest = "./dest"
+# 【选填】备用命令模板：主命令连续失败 fallback_count 次后启用
+# ffmpeg_cmd_fallback = """
+# ffmpeg -y \
+#   -i "{input}" \
+#   -c:v libx264 \
+#   -preset medium \
+#   -crf 28 \
+#   "{output}-encoded.mp4"
+# """
 
-# 【选填】修改时间阈值（秒），同时约束传输与删除；0 或缺省表示不限制
-# mtime_threshold_seconds = 10800
+# 【选填】连续 FFmpeg 失败多少次后切换备用命令；0 表示不启用。默认 0
+# fallback_count = 3
 
-# 【选填】任务结束后是否清理源目录中的空目录；默认 false
-# remove_empty_dirs = true
+# 【选填】单个文件失败次数上限，达到后永久跳过该文件；成功一次即清零。默认 3
+# failure_count = 3
 
-# 【选填】同名冲突策略；范围："skip"（默认）/ "overwrite" / "copy"（创建编号副本）
-# conflict_policy = "skip"
+# 【选填】FFmpeg 单文件处理超时（秒），超时终止进程并按失败计数；0 表示不限。默认 0
+# ffmpeg_timeout = 3600
 
-# 【选填】单文件操作失败的最大重试次数，连续失败达到次数后该文件在本任务内
-#  被跳过（成功一次即清零）；默认 3
-#  范围：≥ 0 的整数
-# max_retries = 3
+# 【选填】稳定性检查：等待 N 秒后复查文件大小是否变化，有变化则跳过本轮。
+# 用于等待下载/复制中的文件写完；0 表示不检查。默认 0
+# stable_duration = 5
 
-# 【选填】纳入规则：仅命中的文件参与处理；缺省视为全部纳入
-# 阈值范围：大小字符串（支持 B、KB/MB/GB/TB 十进制、KiB/MiB/GiB/TiB 二进制）；ge 阈值写 0 表示匹配所有大小
-# 模式末尾带 / 匹配目录，不带 / 匹配文件；支持通配符 * 和 ?
-# [tasks.include_rules]
-# ge."*alpha*" = 0
+# 【选填】处理成功后是否删除源文件。默认 false
+# remove_source = false
 
-# 【选填】排除规则：命中的文件/目录跳过
-# [tasks.exclude_rules]
-# ge."*bravo*" = 0
+# 【选填】延迟删除：成功 N 分钟后删除源文件（仅 remove_source = true 时生效）；
+# 0 表示立即删除。默认 0
+# source_expired_minutes = 60
 
-# 【选填】删除规则：命中的文件/目录直接删除，不传输
-# [tasks.delete_rules]
-# ge."*charlie*" = 0
+# 【选填】成功后源文件的备份目录（保持子目录结构）；
+# remove_source = true 时本项被忽略。默认不备份
+# backup_dir = "./backup"
 
-# ---- rotate 模式：目录超限时从最旧的文件开始轮转（移动或删除）----
+# 【选填】依赖的前置任务 id 列表：前置任务在本轮完成后才会执行本任务
+# depends_on = []
+
+# ------------------------------------------------------------
+# 过滤条件（可选）：不配置任何条件时处理源目录中的所有文件
+# ------------------------------------------------------------
+[tasks.filter]
+# 文件名匹配（fnmatch 语法，匹配相对 source_dir 的路径，不区分大小写，
+# 路径分隔符统一为 /），按 include → exclude → passthrough 顺序流水线过滤：
+#   1. include_patterns：不匹配则跳过（不填或为空则包含所有文件）；
+#   2. exclude_patterns：匹配则跳过；
+#   3. passthrough_patterns：匹配则不经过 FFmpeg 直接移动到目标目录
+#     （不触发 ffprobe，但仍受 file_mtime 约束）。
+include_patterns = ["*.mp4", "*.mkv", "*.avi"]
+exclude_patterns = ["*.tmp"]
+passthrough_patterns = ["*.srt", "*.jpg"]
+
+# 【选填】修改时间冷却（秒）：跳过最近 N 秒内修改过的文件；0 表示不筛选。默认 0
+# file_mtime = 300
+
+# 【选填】文件大小范围（支持 "100MB"、"1.5GiB" 等单位；0 表示不限）
+# size = { min = "100MB", max = "20GB" }
+
+# 【选填】视频时长范围（支持 "10s"、"2h"、"1h30m" 等；0 表示不限）。
+# 注意：以下媒体属性条件任意一项生效都会触发 ffprobe
+# duration = { min = "10s", max = "2h" }
+
+# 【选填】码率范围（十进制单位：1K = 1000bps；支持 "500K"、"1Mbps" 等）
+# video_bitrate = { min = "500K", max = "50M" }
+# audio_bitrate = { min = "64K", max = "320K" }
+# total_bitrate = { min = "1M", max = "50M" }
+
+# 【选填】帧率范围（fps）
+# framerate = { min = 24, max = 60 }
+
+# 【选填】分辨率短边范围（像素）
+# short_side = { min = 720, max = 2160 }
+
+# 【选填】排除视频/音频编码（大小写不敏感）
+# exclude_video_codecs = ["hevc", "av1"]
+# exclude_audio_codecs = ["opus"]
+
+# 第二个任务示例：音频转码
 [[tasks]]
+mode = "transcode"
+name = "音频转码"
+source_dir = "./music"
+dest_dir = "./audio"
+ffmpeg_cmd = """
+ffmpeg -y \
+  -i "{input}" \
+  -c:a libmp3lame \
+  -q:a 2 \
+  "{output}.mp3"
+"""
 
-# id = "task-2"
-# name = "Task 2"
-
-# 【选填】依赖的前置任务 id 列表（单个字符串视为单元素列表）
-# depends_on = "task-1"
-
-# 【必填】任务执行模式；范围："rotate"（在当前配置组合下）
-mode = "rotate"
-
-source = "./source-2"
-# source_quiet_seconds = 300
-
-# dest = "./dest-2"
-
-# remove_empty_dirs = true
-# conflict_policy = "skip"
-
-# 【选填】全局目录总体积上限，0 表示不限制；与 count_limit、rotate_rules 至少配置一项
-# size_limit = "1GiB"
-
-# max_retries = 3
-
-# 【选填】全局文件总数量上限，0 表示不限制
-# count_limit = 20
-
-# 【选填】规则级轮转限制：按模式分组设定上限；count 为数量、size 为体积；
-# 不支持以 / 结尾匹配目录，限制目录下文件用 "目录名/*"
-# [tasks.rotate_rules.count]
-# "*delta*" = 100
-
-# [tasks.rotate_rules.size]
-# "*echo*" = "100MiB"
-
-# [tasks.exclude_rules]
-# ge."*foxtrot*" = 0
-
-# [tasks.delete_rules]
-# ge."*golf*" = 0
-
-# ---- sync 模式：镜像同步（不支持规则系统，过滤见 exclude / exclude_from）----
-[[tasks]]
-
-# id = "task-3"
-# name = "Task 3"
-# depends_on = "task-2"
-
-mode = "sync"
-
-source = "./source-3"
-# source_quiet_seconds = 300
-
-# 【必填】目标目录路径
-dest = "./dest-3"
-
-# 【选填】同步工具；范围："auto"（默认）/ "rsync" / "rclone"
-# tool = "auto"
-
-# 【选填】排除模式列表，由底层工具处理
-# exclude = ["*hotel*", "*india*"]
-
-# 【选填】排除规则文件路径列表（对应 --exclude-from，可配置多个）
-# exclude_from = ["./exclude-1.txt", "./exclude-2.txt"]
-
-# 【选填】备份目录路径，同步中被替换/删除的文件移入 [backup_dir]/[时间戳] 目录；
-# 不能位于 source 或 dest 之下，dest 为 SSH 远端时须为远端绝对路径；默认空（不备份）
-# backup_dir = "/data/sa-backups/task-3"
-
-# 【选填】最多保留的备份份数，0 表示不限制；默认 0
-# max_backups = 0
+[tasks.filter]
+include_patterns = ["*.flac", "*.wav"]

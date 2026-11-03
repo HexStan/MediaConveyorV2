@@ -4,78 +4,73 @@
 
 ## 为什么是“灰盒为主、白盒补盲”
 
-SmartArchiver 的本质是一个“目录树 + 配置 → 新目录树”的变换工具，它**会删除和搬移用户的文件**。因此：
+MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + SQLite 状态”的变换工具，它**会转码、移动和删除用户的文件**。因此：
 
-1. **正确性有一个天然的外部判定标准**——最终哪些文件被移动、删除、保留在原地。断言真实文件系统的最终状态，比断言内部某个分支被走过信号强得多。
-2. **大部分代码是 I/O 编排**（文件系统、subprocess、网络）。对它们做白盒测试意味着大量 mock，测的其实是 mock 本身；rsync/rclone 的同步语义、文件锁、路径分隔符差异都在白盒边界之外。
-3. **少数行为从外部根本观察不到**（惰性求值、遍历顺序状态、多分组扣减），只能靠白盒单元测试兜住。
+1. **正确性有一个天然的外部判定标准**——最终哪些文件被转码、直传、删除、备份、保留在原地，以及状态库里的记录。断言真实文件系统与状态库的最终状态，比断言内部某个分支被走过信号强得多。
+2. **大部分代码是 I/O 编排**（文件系统、ffprobe/ffmpeg subprocess）。对它们做白盒测试意味着大量 mock，测的其实是 mock 本身；FFmpeg 的转码语义、编解码器行为都在白盒边界之外。
+3. **少数行为从外部根本观察不到**（命令模板填充、输出流解析、进度节流），只能靠白盒单元测试兜住。
 
 ## 分层结构
 
 | 层 | 文件 | 被测对象 | 驱动方式 |
 |----|------|---------|---------|
-| 灰盒·模式处理器 | `test_greybox_move_copy.py` | StandardHandler（move/copy） | `run_task()` 入口 + 临时目录树 |
-| 灰盒·模式处理器 | `test_greybox_rotate.py` | RotateHandler | 同上 |
-| 灰盒·模式处理器 | `test_greybox_sync.py` | SyncHandler | 入口驱动，进程边界打桩 |
-| 灰盒·停止语义 | `test_greybox_stop.py` | 停止指令下的处理器边界行为 | `run_task()` 入口 + 注入 LifecycleCoordinator / fs_ops 中止钩子 |
-| 灰盒·持久化 | `test_history_persistence.py` | HistoryManager | 真实文件读写 |
+| 灰盒·模式处理器 | `test_greybox_transcode.py` | TranscodeHandler（扫描/过滤/稳定性/转码/善后/延迟删除/多任务隔离） | `run_task()` 入口 + 临时目录树 + `stub_ffmpeg` 进程边界打桩 |
+| 白盒·媒体属性探测 | `test_media_probe.py` | ffprobe 封装（JSON 解析、容错降级、首个流选取） | `subprocess.run` 进程边界打桩 |
+| 白盒·配置值解析 | `test_media_parsing.py` | 容量/时长/码率解析器（IEC 80000-13 单位语义、显式报错） | 纯函数直接调用 |
+| 白盒·文件过滤 | `test_media_filter.py` | classify 流水线、file_mtime 冷却、媒体属性匹配 | 直接调用 |
+| 白盒·FFmpeg 执行 | `test_media_ffmpeg.py` | 命令模板填充、输出流解析、进度节流、超时与 fast 中止 | `stub_ffmpeg`（conftest） |
+| 白盒·状态库 | `test_state.py` | SQLite 记录语义（任务隔离、成功快照、计数清零） | 真实 SQLite（tmp 目录） |
+| 白盒·任务配置模型 | `test_task_config.py` | 任务模型字段级校验契约（必填/强转/范围值加载期解析/未知字段拒绝） | 直接调用配置模型 + format_validation_error |
+| 白盒+灰盒·任务依赖 | `test_task_dependencies.py` | 加载期 id/depends_on/路径关系校验（resolve_tasks）+ run_tasks 依赖编排 | 直接调用 resolve_tasks + 同步驱动 run_tasks（真实文件系统） |
+| 白盒·调度循环 | `test_runtime_schedule.py` | 首次执行语义（first_run_delay）+ run-once 唤醒语义 + [schedule] 配置模型（ScheduleConfig） | 线程驱动 _run_interval/_run_cron + 真实文件系统；模型校验直接调用 |
 | 白盒·实例控制 | `test_instance_control.py` | 锁探测、控制文件协议、运行状态文件、进程树终止 | 真实锁原语 + 子进程边界 |
 | 白盒·停止信号 | `test_sigterm_fast_stop.py` | SIGTERM → fast 停止的接线映射 | 同步调用已注册处理器 + POSIX 子进程真实信号 |
 | 白盒·实例锁 | `test_instance_lock.py` | SingleInstance 跨进程互斥、instance_name 解析 | 子进程边界 + 纯函数 |
 | 白盒·日志跟随 | `test_logtail.py` | LogFollower（尾部回读/增量/切换） | 真实日志文件 + 手动步进 |
 | 白盒·状态栏 | `test_statusbar.py` | StatusBar（滚动区域/反色绘制/降级） | 注入输出流、尺寸查询与 VT 开关 |
-| 白盒·调度循环 | `test_runtime_schedule.py` | 首次执行语义（first_run_delay）+ run-once 唤醒语义 + [schedule] 配置模型（ScheduleConfig） | 线程驱动 _run_interval/_run_cron + 真实文件系统；模型校验直接调用 |
 | 白盒·run-once 前置判定 | `test_control_run_once.py` | 子命令预检（存活 + 休眠期）与受理回执等待 | 真实锁原语 + 真实状态文件 |
-| 白盒·quiet 确认返回 | `test_control_quiet.py` | `start --quiet` 启动确认等待（实例锁轮询）与 `run-once --quiet` 的受理/未受理返回分支 | 真实锁原语 + 真实状态文件；`_spawn_detached` 进程边界打桩 |
-| 白盒+灰盒·任务依赖 | `test_task_dependencies.py` | 加载期 id/depends_on 解析校验（resolve_tasks）+ run_tasks 依赖编排 | 直接调用 resolve_tasks + 同步驱动 run_tasks（真实文件系统） |
-| 白盒·传输中止 | `test_fs_ops_abort.py` | chunk 边界取消与临时文件清理 | 注入中止检查钩子 |
-| 白盒·规则引擎 | `test_rule_engine.py` | FileFilterPolicy | 直接调用 `decide()` |
-| 白盒·轮转分组 | `test_rotate_groups.py` | RotateGroupManager | 直接调用分组统计接口 |
-| 白盒·纯函数 | `test_size_and_pattern.py` | parse_size_string / match_pattern | 直接调用 |
-| 白盒·路径与分派 | `test_dest.py` | dest 协议串解析、路径规则、validate_dest 校验、转发分派 | 直接调用（unique_dest 用真实文件 / 替身 client） |
-| 白盒·HTTP 直写 | `test_server_direct_write.py` | 上传落盘位置（目标目录 vs 系统临时目录）与服务器选型 | create_app + test_client 探针流；make_server 真实回环；run_server 装配录制 |
-| 白盒·配置解析边界 | `test_config_parsing.py` | http/ssh 远端条目解析容错、重复 alias 先到先得、密钥不落日志、GlobalConfig 数值边界 | 直接调用解析函数 + 捕获日志 |
-| 白盒·任务配置模型 | `test_task_config.py` | 任务模型的字段级校验契约（类型/范围/模式交叉约束/未知字段拒绝）与既有中文错误文案 | 直接调用配置模型 + format_validation_error |
-| 白盒·客户端上传分块 | `test_remote_client_chunk.py` | 上传流式发送按 UPLOAD_CHUNK_SIZE（1MB）分块 | 装配断言：会话适配器 + 真实连接的 blocksize |
-| 端到端·打包产物 | `test_e2e_packaged.py` | PyInstaller 产物（main 入口） | 子进程驱动；`SMARTARCHIVER_BIN` 未设置时整体跳过 |
+| 白盒·quiet 确认返回 | `test_control_quiet.py` | `start --quiet` 启动确认等待与 `run-once --quiet` 的受理/未受理返回分支 | 真实锁原语 + 真实状态文件；`_spawn_detached` 进程边界打桩 |
+| 白盒·文件系统原语 | `test_fs_scan.py` / `test_fs_abort.py` / `test_atomic_write.py` | scan 查询、chunk 边界中止、原子写入 | 真实文件系统 + 中止钩子注入 |
+| 白盒·路径解析 | `test_app_paths.py` | 应用根目录锚定（仓库根 vs 可执行文件目录） | 纯函数 |
+| 端到端·打包产物 | `test_e2e_packaged.py` | PyInstaller 产物（main 入口） | 子进程驱动；`MEDIACONVEYOR_BIN` 未设置时整体跳过 |
 
 ## 编写原则
 
 **原则一：灰盒优先——能从入口测的，不从内部测。**
-新测试先问：“能不能通过 `run_task()`（即 handler 的 `execute()` 入口）加一个临时目录树来驱动？”能，就写成灰盒测试：输入 = 目录树 + 任务配置，断言 = 输出目录树 + 日志。被测代码内部**不打桩**——Logger 用捕获型替身，HistoryManager 用真的，本地目标走真实 fs。任务的配置校验失败、源目录不存在等错误路径，也在这里以“错误日志 + 目录树无变化”的形式验证，不单独拆成校验函数的单测。
+新测试先问：“能不能通过 `run_task()`（即 handler 的 `execute()` 入口）加一个临时目录树来驱动？”能，就写成灰盒测试：输入 = 目录树 + 任务配置，断言 = 输出目录树 + 状态库记录 + 日志。被测代码内部**不打桩**——Logger 用捕获型替身，StateManager 与文件系统用真的，FFmpeg 在进程边界打桩。任务的配置校验失败、源目录不存在等错误路径，也在这里以“错误日志 + 目录树无变化”的形式验证，不单独拆成校验函数的单测。
 
 **原则二：白盒只补外部不可见的契约。**
 只有当行为从 `execute()` 入口无法观察（或观察成本畸高）时，才写白盒单元测试。当前属于这一类的契约：
-- **惰性求值**：`ge."模式" = 0`（阈值 ≤ 0）命中时不计算大小——性能契约，只能靠传入计数 callable 验证（`test_rule_engine.py`）；
-- **include 继承的遍历顺序**：`included_dirs` 在遍历中累积，目录必须先于子文件被评估（`test_rule_engine.py`）；
-- **多分组扣减联动**：一个文件从所有关联分组中扣除统计值（`test_rotate_groups.py`）；
-- **阈值边界**：lt 严格小于、ge 大于等于（两处都有，白盒侧钉死语义）；
-- **落盘位置（HTTP 传输）**：上传字节必须自始至终以目标目录内的临时文件为落盘目标、只经目标目录内一次 rename 落盘，系统临时目录全程零介入——「先落系统临时目录再移动」与直写的最终目录树完全相同，只能在传输过程、落盘边界与服务器选型上观察（`test_server_direct_write.py`）；
-- **上传分块大小（HTTP 传输）**：客户端发送与服务端接收统一按 `UPLOAD_CHUNK_SIZE`（1MB）分块——性能契约，终态不可观察；服务端侧由探针流确定性计数（`test_server_direct_write.py`），客户端侧经回环观察受 TCP 分段时序影响而不确定，只能钉死装配：会话适配器与真实连接的 blocksize（`test_remote_client_chunk.py`）。
+- **ffprobe 输出解析**：JSON 字段到媒体属性字典的映射、异常降级为全零默认值（`test_media_probe.py`）；
+- **命令模板填充**：`{input}`/`{output}` 之外的花括号显式报错、多行合并（`test_media_ffmpeg.py`）；
+- **输出流解析与节流**：`\r`/`\n` 行拆分、`time=`/`speed=` 进度行识别、5 秒节流（`test_media_ffmpeg.py`）；
+- **状态库记录语义**：成功快照（size/mtime）与失败计数是"重处理判定"的唯一依据，任务键隔离需按 (task_key, filepath) 精确钉死（`test_state.py`）；
+- **单位语义**：容量 KB=1000/KiB=1024、码率十进制词头，无效配置显式报错（`test_media_parsing.py`）。
 不在此列的内部细节（比如某个私有方法的返回结构）不要测——那会把测试焊死在实现上。
 
 **原则三：打桩只发生在外部边界。**
-桩只能放在**进程或网络边界**（`subprocess.Popen`、`shutil.which`、SSH 远端探测），因为这些是“不在我们控制之内的外部世界”。业务函数之间不许互相打桩——那会掩盖真实的集成缺陷。`test_greybox_sync.py` 的 `stub_procs` fixture 是范式：拦截 `Popen` 记录构造出的命令行，断言我们传给外部工具的参数正确，而不假装自己测试了 rsync。
+桩只能放在**进程或网络边界**（`subprocess.Popen`、`subprocess.run`），因为这些是“不在我们控制之内的外部世界”。业务函数之间不许互相打桩——那会掩盖真实的集成缺陷。conftest 的 `stub_ffmpeg` fixture 是范式：拦截 `Popen` 记录构造出的命令行，断言我们传给 FFmpeg 的参数正确，而不假装自己测试了转码。
 
 **原则四：确定性——禁止依赖真实时钟。**
 - 所有 `now` 通过 `run_task(task, now=NOW)` 显式注入；
 - 所有文件 mtime 在 `make_tree()` 里显式设定（`NOW`、`OLD`、`RECENT` 常量，或逐文件元组）；
-- 不 sleep、不依赖“现在几点”、不依赖文件系统时间戳默认值。
+- 不 sleep、不依赖“现在几点”、不依赖文件系统时间戳默认值（稳定性检查与调度唤醒测试中的短 sleep 仅用于等待确定性事件，不构成时序断言）。
 
 **原则五：断言优先落在目录树快照上。**
-`snapshot()` 返回 `{相对路径: 大小}`，是主断言对象；`handler.stats` 和捕获的日志只作补充信号（如 `conflict_skipped == 1`、“致命错误”日志）。文件内容需要区分时（冲突覆盖测试），单独读文件断言。
+`snapshot()` 返回 `{相对路径: 大小}`，是主断言对象；`handler.stats`、状态库查询和捕获的日志只作补充信号（如 `failed == 1`、“命令模板无效”日志）。文件内容需要区分时，单独读文件断言。
 
 **原则六：一个测试只陈述一个行为。**
-测试名就是行为描述（`test_exclude_shields_file_from_delete`），读测试名应当能看懂它守护的契约。组合行为的验证交给灰盒场景测试，白盒测试保持单点。
+测试名就是行为描述（`test_exclude_overrides_passthrough`），读测试名应当能看懂它守护的契约。组合行为的验证交给灰盒场景测试，白盒测试保持单点。
 
 **原则七：真实组件优先于替身。**
-优先级：真实组件 > 捕获型替身（记录调用但不改变行为）> 行为型 mock（伪造返回值）。Logger 用捕获型（不改行为只记录）；HistoryManager、文件系统、本地目标（fs 路径）全部用真的。每引入一个行为型 mock，都要能回答“我在替谁做决定，依据是什么”。
+优先级：真实组件 > 捕获型替身（记录调用但不改变行为）> 行为型 mock（伪造返回值）。Logger 用捕获型（不改行为只记录）；StateManager、文件系统全部用真的。每引入一个行为型 mock，都要能回答“我在替谁做决定，依据是什么”。
 
 ## 基础设施
 
 **`conftest.py`**
-- `app_context`：初始化全局 AppContext——捕获型 `CaptureLogger` + **真实** `HistoryManager`（指向 tmp 目录）+ 默认 `GlobalConfig`；测试结束清理单例。
-- `run_task(task, now=None, remote_clients=None, ssh_remotes=None)`：灰盒测试统一入口。与生产装配路径对齐：任务字典先经加载期解析（`resolve_tasks`——任务模型校验 + dest 别名校验，错误日志在此给出，被拒绝的任务返回 None），再按 `mode` 从注册表构造处理器并执行，返回 handler 实例（供补充断言）。`remote_clients` / `ssh_remotes` 写入 AppContext，供加载期 dest 别名校验与 core.dest 转发层取用。
+- `app_context`：初始化全局 AppContext——捕获型 `CaptureLogger` + **真实** `StateManager`（指向 tmp 目录）+ 默认 `GlobalConfig`；测试结束清理单例与处理器类级去重状态。
+- `stub_ffmpeg`：进程边界打桩（记录命令行 `calls` + 可配置行为 `state`：returncode / output / hangs / on_start）。
+- `run_task(task, now=None)`：灰盒测试统一入口。与生产装配路径对齐：任务字典先经加载期解析（`resolve_tasks`——任务模型校验 + 路径关系校验，错误日志在此给出，被拒绝的任务返回 None），再按 `mode` 从注册表构造处理器并执行，返回 handler 实例（供补充断言）。
 
 **`helpers.py`**
 - `NOW / OLD / RECENT`：确定性时间常量（`OLD` 距 `NOW` 30 天，`RECENT` 距 60 秒）。
@@ -87,13 +82,13 @@ SmartArchiver 的本质是一个“目录树 + 配置 → 新目录树”的变�
 `test_e2e_packaged.py` 以黑盒方式驱动 PyInstaller 打包产物，覆盖灰盒够不到的两段链路：
 
 1. **TOML 配置形状 → 任务字典**：灰盒直接传入 Python 字典，绕过了 ConfigManager；
-   端到端走真实的 config.toml 加载路径，钉死规则块在 TOML 中的写法；
+   端到端走真实的 config.toml 加载路径，钉死任务/过滤块在 TOML 中的写法；
 2. **打包布局与入口启动**：冻结形态下应用根目录 = 可执行文件所在目录
    （`src/app/paths.py`），打包缺失模块、入口崩溃等只有真实产物能暴露。
 
 约定：
 
-- **启用条件**：环境变量 `SMARTARCHIVER_BIN` 指向打包程序目录（如 `dist/SmartArchiver`）；
+- **启用条件**：环境变量 `MEDIACONVEYOR_BIN` 指向打包程序目录（如 `dist/MediaConveyor`）；
   未设置时整个模块跳过，日常源码开发不受影响。CI 中由 executable-build.yml 在构建后设置。
 - **驱动方式**：把程序目录复制到 pytest 临时位置（不污染构建产物），写入测试 config.toml
   后以子进程运行二进制，断言退出码与目录树快照——驱动子进程即进程边界，符合原则三。
@@ -104,19 +99,19 @@ SmartArchiver 的本质是一个“目录树 + 配置 → 新目录树”的变�
 
 ```bash
 python scripts/build_executable.py
-SMARTARCHIVER_BIN=dist/SmartArchiver python -m pytest tests/test_e2e_packaged.py -v
+MEDIACONVEYOR_BIN=dist/MediaConveyor python -m pytest tests/test_e2e_packaged.py -v
 ```
 
 ## 运行
 
 ```bash
 python -m pytest            # 全部测试
-python -m pytest tests/test_greybox_move_copy.py -v
+python -m pytest tests/test_greybox_transcode.py -v
 ```
 
 ## 新增测试的决策路径
 
-1. 行为能从 `execute()` 入口观察？→ 写进对应灰盒文件（`test_greybox_*.py`）。
-2. 不能观察，但属于对外契约（性能、顺序、联动）？→ 写进对应白盒文件，并在模块 docstring 里注明“为什么这里必须白盒”。
-3. 涉及外部进程/网络？→ 只在边界打桩，参考 `test_greybox_sync.py` 的 `stub_procs`。
+1. 行为能从 `execute()` 入口观察？→ 写进 `test_greybox_transcode.py`。
+2. 不能观察，但属于对外契约（性能、顺序、单位语义）？→ 写进对应白盒文件，并在模块 docstring 里注明“为什么这里必须白盒”。
+3. 涉及外部进程？→ 只在边界打桩，参考 conftest 的 `stub_ffmpeg`。
 4. 三条都不满足 → 先怀疑这个测试有没有必要存在。

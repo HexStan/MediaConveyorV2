@@ -21,6 +21,7 @@ from src.app.context import AppContext
 from src.app.instance import SingleInstance
 from src.app.lifecycle import install_abort_check, install_sigterm_fast_stop
 from src.core import process_task
+from src.core.state import StateManager
 from src.core.types import TaskOutcome
 from src.output.logger import Logger, setup_logger
 from src.output.presentation import fmt_timespan
@@ -149,15 +150,19 @@ def _load_and_init(config_path: str, console: bool | None = None) -> ConfigManag
         bridge_loggers=("src.fs", instance.__name__),
     )
 
+    # 状态库与配置管理器随实例生命周期创建/关闭
+    state = StateManager(os.path.join(paths.resolve_data_dir(bootstrap.data_dir), "state.db"))
+
     manager = ConfigManager(config_path, logger)
     try:
         cfg = manager.load(raw_config)
     except ConfigError as e:
         # 首次加载的致命配置错误：干净退出（热重载路径由 reload 的备份回退兜底）
+        state.close()
         logger.critical(f"配置文件无效：{e}")
         sys.exit(1)
 
-    AppContext.init(logger, cfg.config, cfg.tasks, instance_name=instance_name)
+    AppContext.init(logger, cfg.config, cfg.tasks, state=state, instance_name=instance_name)
 
     if invalid:
         logger.warning("instance_name 配置值非法，已使用默认实例标识。")
@@ -350,4 +355,5 @@ def run_client() -> None:
         # stop --fast：一次性运行被中止即退出，无需额外处理
         pass
     finally:
+        ctx.require_state().close()
         ctx.logger.info("MediaConveyor 已退出。")
