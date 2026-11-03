@@ -1,6 +1,6 @@
 """端到端测试：以子进程驱动 PyInstaller 打包产物（黑盒）。
 
-启用条件：环境变量 SMARTARCHIVER_BIN 指向打包程序目录（如 dist/SmartArchiver）。
+启用条件：环境变量 MEDIACONVEYOR_BIN 指向打包程序目录（如 dist/MediaConveyor）。
 未设置时整个模块跳过——日常源码开发不构建二进制，套件保持全绿；
 CI 中由 executable-build.yml 在构建后设置该变量执行。
 
@@ -27,18 +27,18 @@ import pytest
 from src.platform_info import exe_name
 from tests.helpers import OLD, make_tree, snapshot
 
-PROGRAM_DIR = os.environ.get("SMARTARCHIVER_BIN")
+PROGRAM_DIR = os.environ.get("MEDIACONVEYOR_BIN")
 
 pytestmark = pytest.mark.skipif(
     not PROGRAM_DIR or not os.path.isdir(PROGRAM_DIR),
-    reason="未设置 SMARTARCHIVER_BIN（指向打包程序目录，如 dist/SmartArchiver），"
+    reason="未设置 MEDIACONVEYOR_BIN（指向打包程序目录，如 dist/MediaConveyor），"
     "跳过打包产物端到端测试",
 )
 
 
 def _entry_name():
     """打包入口名：Windows 为 SmartArchiver.exe，其余平台为裸二进制。"""
-    return exe_name("SmartArchiver")
+    return exe_name("MediaConveyor")
 
 
 def _run_binary(program_dir, timeout=120):
@@ -78,7 +78,7 @@ def _assert_ok(result):
 @pytest.fixture
 def program_dir(tmp_path):
     """复制打包程序目录到临时位置：不污染构建产物，且允许写入测试配置。"""
-    target = tmp_path / "SmartArchiver"
+    target = tmp_path / "MediaConveyor"
     shutil.copytree(PROGRAM_DIR, target, ignore=shutil.ignore_patterns("logs"))
     return str(target)
 

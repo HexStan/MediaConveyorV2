@@ -13,36 +13,35 @@
 # 所有依赖钉精确版本，由 Dependabot（uv 生态）每周同步更新 pyproject.toml 与 uv.lock。
 
 [project]
-name = "smartarchiver"
+name = "mediaconveyor"
 # 版本号唯一出处（发布流程与构建脚本使用，见 RELEASE-GUIDE.md）：
 # [x].[y].[z] 为正式版，带 -dev 后缀为开发版。
-version = "0.40.1-dev"
-description = "灵活的文件归档与清理工具：按规则移动、复制、轮转与同步文件"
+version = "0.1.0-dev"
+description = "轻量级音视频自动化工具：监听目录，在文件写入完成后自动调用 FFmpeg 处理"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "HexStan", email = "vanadir@163.com" }]
 requires-python = ">=3.14"
-keywords = ["archive", "cleanup", "file-management", "rotate", "rsync", "rclone", "sync"]
+keywords = ["ffmpeg", "transcode", "video", "audio", "automation", "media"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
-    "Intended Audience :: System Administrators",
+    "Intended Audience :: End Users/Desktop",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3.15",
-    "Topic :: System :: Archiving",
-    "Topic :: System :: Systems Administration",
+    "Topic :: Multimedia :: Video :: Conversion",
 ]
 
 [project.urls]
-Homepage = "https://github.com/HexStan/SmartArchiver"
-Repository = "https://github.com/HexStan/SmartArchiver"
-Issues = "https://github.com/HexStan/SmartArchiver/issues"
-Changelog = "https://github.com/HexStan/SmartArchiver/blob/dev/CHANGELOG.md"
+Homepage = "https://github.com/HexStan/MediaConveyor"
+Repository = "https://github.com/HexStan/MediaConveyor"
+Issues = "https://github.com/HexStan/MediaConveyor/issues"
+Changelog = "https://github.com/HexStan/MediaConveyor/blob/master/CHANGELOG.md"
 
 [dependency-groups]
 # 运行依赖：客户端模式的全部第三方库（Docker 镜像只装本组）

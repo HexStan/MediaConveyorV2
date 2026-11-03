@@ -40,16 +40,16 @@ jobs:
         run: uv run --no-sync python scripts/build_executable.py --target ${{ matrix.target }}
 
       - name: Smoke test package
-        run: uv run --no-sync python scripts/smoke_test.py "dist/SmartArchiver-*.zip"
+        run: uv run --no-sync python scripts/smoke_test.py "dist/MediaConveyor-*.zip"
 
       - name: Run packaged E2E tests
         run: uv run --no-sync python -m pytest tests/test_e2e_packaged.py -v
         env:
-          SMARTARCHIVER_BIN: dist/SmartArchiver
+          MEDIACONVEYOR_BIN: dist/MediaConveyor
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: SmartArchiver-${{ matrix.target }}
+          name: MediaConveyor-${{ matrix.target }}
           path: dist/*.zip
           if-no-files-found: error

@@ -19,7 +19,7 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: SmartArchiver-*
+          pattern: MediaConveyor-*
           merge-multiple: true
           path: dist
 

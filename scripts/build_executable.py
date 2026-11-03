@@ -1,16 +1,17 @@
-"""构建 SmartArchiver 可执行文件（PyInstaller onedir + 内置 rclone）。
+"""构建 MediaConveyor 可执行文件（PyInstaller onedir）。
 
 用法:
     python scripts/build_executable.py                       # 自动识别当前平台
     python scripts/build_executable.py --target macos-arm64  # 指定目标平台
 
-流程: 下载对应平台的 rclone 官方压缩包 → 解包暂存到 build/ 目录
-      → 以 SmartArchiver.spec 执行 PyInstaller onedir 打包
+流程: 以 MediaConveyor.spec 执行 PyInstaller onedir 打包
       → 将示例配置复制进程序目录 → 压缩为发行 zip。
 
+FFmpeg 不打入包内：运行要求 PATH 中已安装 ffmpeg / ffprobe。
+
 产物:
-    dist/SmartArchiver/                          解包即用的程序目录
-    dist/SmartArchiver-<版本>-<目标平台>.zip      发行压缩包（config/ 下附带示例配置）
+    dist/MediaConveyor/                              解包即用的程序目录
+    dist/MediaConveyor-<版本>-<目标平台>.zip          发行压缩包（config/ 下附带示例配置）
 """
 
 import argparse
@@ -20,7 +21,6 @@ import shutil
 import subprocess
 import sys
 import tomllib
-import urllib.request
 import zipfile
 
 # 支持的构建目标（Windows/macOS × AMD64/ARM64）
@@ -32,15 +32,7 @@ TARGETS = (
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SPEC_FILE = os.path.join(REPO_ROOT, "SmartArchiver.spec")
-
-
-def rclone_url(target, rclone_version):
-    """rclone 官方压缩包下载地址（macOS 在官方发布包命名中为 osx）。"""
-    return (
-        f"https://downloads.rclone.org/v{rclone_version}"
-        f"/rclone-v{rclone_version}-{target.replace('macos', 'osx')}.zip"
-    )
+SPEC_FILE = os.path.join(REPO_ROOT, "MediaConveyor.spec")
 
 
 def detect_target():
@@ -61,7 +53,7 @@ def detect_target():
 
 
 def read_pyproject():
-    """加载 pyproject.toml（应用版本与内置 rclone 版本的唯一出处）。"""
+    """加载 pyproject.toml（应用版本的唯一出处）。"""
     with open(os.path.join(REPO_ROOT, "pyproject.toml"), "rb") as f:
         return tomllib.load(f)
 
@@ -71,72 +63,9 @@ def read_version(pyproject):
     return pyproject["project"]["version"]
 
 
-def read_rclone_version(pyproject):
-    """从 [tool.smartarchiver].rclone_version 读取内置 rclone 版本（与 Docker 镜像共用）。"""
-    return pyproject["tool"]["smartarchiver"]["rclone_version"]
-
-
-def download(url, dest, retries=3):
-    for attempt in range(1, retries + 1):
-        try:
-            print(f"下载 rclone（第 {attempt}/{retries} 次）: {url}")
-            part = dest + ".part"
-            request = urllib.request.Request(url, headers={"User-Agent": "SmartArchiver-build"})
-            with urllib.request.urlopen(request) as resp, open(part, "wb") as f:
-                f.write(resp.read())
-            os.replace(part, dest)
-            return
-        except Exception as e:  # noqa: BLE001
-            if attempt == retries:
-                raise SystemExit(f"下载失败: {url}\n{e}")
-            print(f"下载失败，将重试: {e}")
-
-
-def stage_rclone(target, rclone_version):
-    """下载并解包对应平台的 rclone，返回暂存的二进制路径（已暂存则复用）。
-
-    暂存目录按版本隔离，版本升级后自动重新下载，不会复用旧版二进制。
-    """
-    exe_name = "rclone.exe" if target.startswith("windows") else "rclone"
-    stage_dir = os.path.join(REPO_ROOT, "build", "rclone", f"v{rclone_version}", target)
-    os.makedirs(stage_dir, exist_ok=True)
-    staged = os.path.join(stage_dir, exe_name)
-
-    if os.path.isfile(staged):
-        print(f"复用已暂存的 rclone: {staged}")
-        return staged
-
-    zip_path = os.path.join(stage_dir, "rclone.zip")
-    download(rclone_url(target, rclone_version), zip_path)
-
-    with zipfile.ZipFile(zip_path) as zf:
-        # 压缩包内为 rclone-vX.Y.Z-平台/rclone[.exe] 的嵌套结构
-        member = next(n for n in zf.namelist() if os.path.basename(n) == exe_name)
-        zf.extract(member, stage_dir)
-    shutil.move(os.path.join(stage_dir, member), staged)
-    os.remove(zip_path)
-
-    if os.name != "nt":
-        os.chmod(staged, 0o755)
-
-    print(f"rclone 已暂存: {staged}")
-    return staged
-
-
-def verify_rclone(rclone_bin):
-    """执行 rclone version 验证二进制可用。"""
-    try:
-        result = subprocess.run([rclone_bin, "version"], capture_output=True, text=True, check=True)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise SystemExit(f"内置 rclone 无法运行: {e}")
-
-    first_line = result.stdout.splitlines()[0] if result.stdout else ""
-    print(f"内置 rclone 校验通过: {first_line}")
-
-
 def clean_dist():
     """清空上一次构建产物，避免手动运行残留（config.toml、logs 等）混入发行包。"""
-    dist_dir = os.path.join(REPO_ROOT, "dist", "SmartArchiver")
+    dist_dir = os.path.join(REPO_ROOT, "dist", "MediaConveyor")
     if os.path.isdir(dist_dir):
         shutil.rmtree(dist_dir)
 
@@ -144,17 +73,14 @@ def clean_dist():
 def stage_example_configs():
     """将仓库 config/ 下的示例配置复制进程序目录，供用户改名后使用。"""
     config_src = os.path.join(REPO_ROOT, "config")
-    config_dst = os.path.join(REPO_ROOT, "dist", "SmartArchiver", "config")
+    config_dst = os.path.join(REPO_ROOT, "dist", "MediaConveyor", "config")
     os.makedirs(config_dst, exist_ok=True)
     for name in os.listdir(config_src):
         if name.endswith(".example.toml"):
             shutil.copy2(os.path.join(config_src, name), os.path.join(config_dst, name))
 
 
-def run_pyinstaller(rclone_bin):
-    env = os.environ.copy()
-    env["RCLONE_STAGE"] = rclone_bin
-
+def run_pyinstaller():
     cmd = [
         sys.executable,
         "-m",
@@ -164,16 +90,16 @@ def run_pyinstaller(rclone_bin):
         "--clean",
     ]
     print("+ " + " ".join(cmd))
-    subprocess.run(cmd, cwd=REPO_ROOT, env=env, check=True)
+    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 
 
 def make_zip(target, version):
-    """压缩 dist/SmartArchiver 为发行 zip（保留可执行权限位）。"""
-    dist_dir = os.path.join(REPO_ROOT, "dist", "SmartArchiver")
+    """压缩 dist/MediaConveyor 为发行 zip（保留可执行权限位）。"""
+    dist_dir = os.path.join(REPO_ROOT, "dist", "MediaConveyor")
     if not os.path.isdir(dist_dir):
         raise SystemExit(f"打包产物缺失: {dist_dir}")
 
-    zip_path = os.path.join(REPO_ROOT, "dist", f"SmartArchiver-{version}-{target}.zip")
+    zip_path = os.path.join(REPO_ROOT, "dist", f"MediaConveyor-{version}-{target}.zip")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, _dirs, files in os.walk(dist_dir):
             for name in files:
@@ -192,7 +118,7 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
-    parser = argparse.ArgumentParser(description="构建 SmartArchiver 可执行文件")
+    parser = argparse.ArgumentParser(description="构建 MediaConveyor 可执行文件")
     parser.add_argument(
         "--target",
         choices=TARGETS,
@@ -203,18 +129,15 @@ def main():
     target = args.target or detect_target()
     pyproject = read_pyproject()
     version = read_version(pyproject)
-    rclone_version = read_rclone_version(pyproject)
-    print(f"构建目标: {target}，版本: {version}，内置 rclone: {rclone_version}")
+    print(f"构建目标: {target}，版本: {version}")
 
-    rclone_bin = stage_rclone(target, rclone_version)
-    verify_rclone(rclone_bin)
     clean_dist()
-    run_pyinstaller(rclone_bin)
+    run_pyinstaller()
     stage_example_configs()
     zip_path = make_zip(target, version)
 
     print(
-        f"构建完成:\n  程序目录: dist{os.sep}SmartArchiver\n  发行包: {os.path.relpath(zip_path, REPO_ROOT)}"
+        f"构建完成:\n  程序目录: dist{os.sep}MediaConveyor\n  发行包: {os.path.relpath(zip_path, REPO_ROOT)}"
     )
 
 

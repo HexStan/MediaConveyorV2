@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # 临时文件后缀。采用确定性命名（目标同目录 + 固定后缀），
 # 是「再次写入同名文件时清理上次崩溃残留」的前提。
-_PARTIAL_SUFFIX = ".sa-part"
+_PARTIAL_SUFFIX = ".mc-part"
 
 
 def _partial_temp_path(dest_path: str) -> str:

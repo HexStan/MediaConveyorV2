@@ -67,7 +67,7 @@ PHASE_RUNNING = "running"  # 正在执行一轮任务
 PHASES = (PHASE_STARTING, PHASE_SLEEPING, PHASE_RUNNING)
 
 # start 子命令标记分离式子进程的环境变量：子进程据此关闭控制台输出
-DETACHED_ENV = "SMARTARCHIVER_DETACHED"
+DETACHED_ENV = "MEDIACONVEYOR_DETACHED"
 
 
 # ============================================================
@@ -75,7 +75,7 @@ DETACHED_ENV = "SMARTARCHIVER_DETACHED"
 # ============================================================
 
 # instance_name 未配置或非法时使用的默认实例标识
-DEFAULT_INSTANCE_NAME = "smartarchiver"
+DEFAULT_INSTANCE_NAME = "mediaconveyor"
 
 
 def _lock_available() -> bool:

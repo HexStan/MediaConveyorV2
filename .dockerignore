@@ -19,7 +19,7 @@ deprecated/
 # PyInstaller 打包产物与构建脚本(镜像只运行源码,不需要打包物)
 build/
 dist/
-SmartArchiver.spec
+MediaConveyor.spec
 scripts/
 
 # 运行时生成的文件 / 本地配置(运行时通过挂载提供,勿打入镜像)
