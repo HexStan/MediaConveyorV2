@@ -14,6 +14,7 @@ from src.app.lifecycle import LifecycleCoordinator
 from src.core.media.ffmpeg import (
     TemplateFormatError,
     build_command,
+    part_output_filename,
     render_output_filename,
     run_ffmpeg,
 )
@@ -80,6 +81,11 @@ class TestRenderOutputFilename:
     def test_empty_braces_raise(self):
         with pytest.raises(TemplateFormatError):
             render_output_filename("{}.mp4", "a")
+
+
+class TestPartOutputFilename:
+    def test_part_name_wraps_final_name(self):
+        assert part_output_filename("a-encoded.mp4") == ".mc-ffmpeg-part.a-encoded.mp4"
 
 
 class TestRunFFmpeg:

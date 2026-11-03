@@ -15,9 +15,9 @@ import os
 import pytest
 
 from src import fs
-from src.fs.atomic import _PARTIAL_SUFFIX
+from src.fs.atomic import PARTIAL_SUFFIX
 
-PARTIAL_NAME = ".a.txt" + _PARTIAL_SUFFIX
+PARTIAL_NAME = ".a.txt" + PARTIAL_SUFFIX
 
 
 # ============================================================
@@ -235,7 +235,7 @@ class TestMoveFile:
         def fake_replace(s, d):
             if s == str(src) and d == str(dest):
                 raise OSError(errno.EXDEV, "Invalid cross-device link")
-            if s.endswith(_PARTIAL_SUFFIX):
+            if s.endswith(PARTIAL_SUFFIX):
                 raise OSError(errno.ENOSPC, "No space left on device")
             return real_replace(s, d)
 

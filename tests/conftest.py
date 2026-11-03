@@ -7,6 +7,7 @@
 """
 
 import io
+import os
 import subprocess
 
 import pytest
@@ -107,6 +108,9 @@ def stub_ffmpeg(monkeypatch):
     - ``calls``：收到的完整命令行列表；
     - ``state``：可配置的返回行为（returncode / output / hangs / on_start，
       on_start 在子进程"启动"时调用，可用来模拟 ffmpeg 写出半成品文件）。
+    - 成功退出（returncode == 0 且未配置 on_start）时模拟 ffmpeg 的产出：
+      向命令行末尾的 part 路径（``{output}`` 的填充值）写出内容，处理器
+      随后的改名善后才有真实对象可操作。
     """
     calls: list[str] = []
     state = {"returncode": 0, "output": b"", "on_start": None, "hangs": False}
@@ -115,6 +119,13 @@ def stub_ffmpeg(monkeypatch):
         calls.append(cmd)
         if state["on_start"] is not None:
             state["on_start"](cmd)
+        elif state["returncode"] == 0 and not state["hangs"]:
+            # {output} 的填充值位于命令行末尾（剥去平台引号）；仅当它是
+            # part 路径时才写出，避免单元测试的裸命令被误当路径
+            output_path = cmd.rstrip().rsplit(None, 1)[-1].strip("\"'")
+            if os.path.basename(output_path).startswith(ffmpeg_module.FFMPEG_PART_PREFIX):
+                with open(output_path, "wb") as f:
+                    f.write(b"encoded")
         return FakePopen(
             returncode=state["returncode"],
             output=state["output"],

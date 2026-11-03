@@ -8,8 +8,11 @@ FFmpeg 以进程边界打桩（stub_ffmpeg）：同步语义本身不测，只�
 
 import os
 
+import pytest
+
 from src.app.context import AppContext
 from src.core.state import file_key, task_key
+from src.fs import FsOpError, TransferAbortedError
 from tests import helpers
 from tests.helpers import make_tree, snapshot
 
@@ -80,9 +83,13 @@ class TestFFmpegTask:
         # 源文件默认保留在原位置
         assert snapshot(task["source_dir"]) == {"a.mp4": 5}
         # 命令行包含 {input}/{output} 的填充结果（引号由程序按平台添加，
-        # 引或不引均包含裸路径子串）
+        # 引或不引均包含裸路径子串）；{output} 指向瞬态 part 文件而非最终名
         assert os.path.join(task["source_dir"], "a.mp4") in calls[0]
-        assert os.path.join(task["dest_dir"], "a-encoded.mp4") in calls[0]
+        part_output = os.path.join(task["dest_dir"], ".mc-ffmpeg-part.a-encoded.mp4")
+        assert part_output in calls[0]
+        assert os.path.join(task["dest_dir"], "a-encoded.mp4") not in calls[0]
+        # 成功后 part 文件已原子改名为最终输出文件
+        assert snapshot(task["dest_dir"]) == {"a-encoded.mp4": 7}
         # 状态库记录成功与源文件快照
         success = state().get_success_state(
             key_of(task), file_key(os.path.join(task["source_dir"], "a.mp4"))
@@ -98,8 +105,11 @@ class TestFFmpegTask:
 
         run_task(task, now=NOW)
 
-        expected_output = os.path.join(task["dest_dir"], "sub", "dir", "a-encoded.mp4")
-        assert expected_output in calls[0]
+        part_output = os.path.join(task["dest_dir"], "sub", "dir", ".mc-ffmpeg-part.a-encoded.mp4")
+        assert part_output in calls[0]
+        assert os.path.join(task["dest_dir"], "sub", "dir", "a-encoded.mp4") not in calls[0]
+        # 改名复原后子目录结构与最终文件名不受影响
+        assert snapshot(os.path.join(task["dest_dir"], "sub", "dir")) == {"a-encoded.mp4": 7}
 
     def test_passthrough_moves_directly(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
@@ -108,7 +118,7 @@ class TestFFmpegTask:
 
         handler = run_task(task, now=NOW)
 
-        assert snapshot(task["dest_dir"]) == {"a.srt": 4}
+        assert snapshot(task["dest_dir"]) == {"a.srt": 4, "b-encoded.mp4": 7}
         assert snapshot(task["source_dir"]) == {"b.mp4": 5}
         # srt 不经 ffmpeg，mp4 经 ffmpeg
         assert len(calls) == 1
@@ -184,7 +194,7 @@ class TestDisposition:
         run_task(task, now=NOW)
 
         assert snapshot(task["source_dir"]) == {"a.mp4": 5}
-        assert snapshot(task["dest_dir"]) == {}
+        assert snapshot(task["dest_dir"]) == {"a-encoded.mp4": 7}
 
     def test_empty_dirs_cleaned_after_success(self, run_task, tmp_path, stub_ffmpeg):
         task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", remove_source=True)
@@ -294,7 +304,7 @@ class TestFailures:
 
         def fake_ffmpeg_writes(cmd):
             dest = os.path.join(str(tmp_path), "dest")
-            with open(os.path.join(dest, "a-encoded.mp4"), "wb") as f:
+            with open(os.path.join(dest, ".mc-ffmpeg-part.a-encoded.mp4"), "wb") as f:
                 f.write(b"partial")
             with open(os.path.join(dest, "a.log"), "wb") as f:
                 f.write(b"log")
@@ -302,19 +312,85 @@ class TestFailures:
         fstate["on_start"] = fake_ffmpeg_writes
         task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
-        # 处理前已存在的文件不受清理影响
+        # 处理前已存在的最终输出文件不受任何影响（FFmpeg 只写 part 文件）
         dest_dir = os.path.join(str(tmp_path), "dest")
         os.makedirs(dest_dir, exist_ok=True)
-        with open(os.path.join(dest_dir, "other-encoded.mp4"), "wb") as f:
-            f.write(b"other")
+        with open(os.path.join(dest_dir, "a-encoded.mp4"), "wb") as f:
+            f.write(b"previous")
 
         run_task(task, now=NOW)
 
-        # 清理精确匹配声明的输出文件名：残留的输出本体被删，
-        # 旁路写出的 a.log 与处理前已存在的文件均不动
-        assert not os.path.exists(os.path.join(dest_dir, "a-encoded.mp4"))
+        # 失败清理精确作用于 part 文件：本轮残骸被删，
+        # 旁路写出的 a.log 与处理前已存在的最终输出均不动
+        assert not os.path.exists(os.path.join(dest_dir, ".mc-ffmpeg-part.a-encoded.mp4"))
         assert os.path.exists(os.path.join(dest_dir, "a.log"))
-        assert os.path.exists(os.path.join(dest_dir, "other-encoded.mp4"))
+        with open(os.path.join(dest_dir, "a-encoded.mp4"), "rb") as f:
+            assert f.read() == b"previous"
+
+
+# ============================================================
+# part 文件生命周期（瞬态命名 → 原子复原 / 清理）
+# ============================================================
+
+
+class TestPartFileLifecycle:
+    def test_stale_part_file_discarded_before_processing(self, run_task, tmp_path, stub_ffmpeg):
+        """上次崩溃残留的同名 part 文件在处理启动前被清理。"""
+        _calls, fstate = stub_ffmpeg
+        fstate["returncode"] = 1  # 失败且不产出任何文件
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+        dest_dir = os.path.join(str(tmp_path), "dest")
+        os.makedirs(dest_dir, exist_ok=True)
+        stale_part = os.path.join(dest_dir, ".mc-ffmpeg-part.a-encoded.mp4")
+        with open(stale_part, "wb") as f:
+            f.write(b"stale")
+
+        run_task(task, now=NOW)
+
+        assert not os.path.exists(stale_part)
+
+    def test_rename_failure_counts_as_plain_failure(
+        self, run_task, tmp_path, stub_ffmpeg, monkeypatch
+    ):
+        """改名失败按普通文件失败处理：不烧 fallback 专用计数，part 随之清理。"""
+
+        def locked_replace(src, dst):
+            raise FsOpError("目标被占用")
+
+        monkeypatch.setattr("src.core.handlers.ffmpeg_task.move_file", locked_replace)
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
+        filepath = os.path.join(task["source_dir"], "a.mp4")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+
+        handler = run_task(task, now=NOW)
+
+        fkey = file_key(filepath)
+        assert state().get_failure_count(key_of(task), fkey) == 1
+        assert state().get_ffmpeg_failure_count(key_of(task), fkey) == 0
+        assert handler.stats.failed == 1
+        assert not os.path.exists(os.path.join(task["dest_dir"], ".mc-ffmpeg-part.a-encoded.mp4"))
+
+    def test_fast_stop_cleans_part_file(self, run_task, tmp_path, stub_ffmpeg):
+        """fast 停止打断 FFmpeg：写入中的 part 文件被清理，源文件原样。"""
+        _calls, fstate = stub_ffmpeg
+
+        def abort_and_write_part(cmd):
+            dest = os.path.join(str(tmp_path), "dest")
+            os.makedirs(dest, exist_ok=True)
+            with open(os.path.join(dest, ".mc-ffmpeg-part.a-encoded.mp4"), "wb") as f:
+                f.write(b"partial")
+            AppContext.get().lifecycle.request_abort()
+
+        fstate["on_start"] = abort_and_write_part
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+
+        with pytest.raises(TransferAbortedError):
+            run_task(task, now=NOW)
+
+        assert not os.path.exists(os.path.join(task["dest_dir"], ".mc-ffmpeg-part.a-encoded.mp4"))
+        assert snapshot(task["source_dir"]) == {"a.mp4": 5}
 
 
 # ============================================================

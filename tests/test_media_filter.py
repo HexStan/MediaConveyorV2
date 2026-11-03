@@ -66,6 +66,20 @@ class TestClassify:
 
         assert f.classify("alpha\\a.mp4") is FileAction.PROCESS
 
+    def test_reserved_transient_names_skipped(self):
+        """本工具瞬态文件为保留名：先于用户 patterns 判定，无条件跳过。"""
+        f = make_filter(include_patterns=["*"], passthrough_patterns=["*"])
+
+        assert f.classify(".mc-ffmpeg-part.a-encoded.mp4") is FileAction.SKIP
+        assert f.classify("sub/.mc-ffmpeg-part.a-encoded.mp4") is FileAction.SKIP
+        # 无扩展名的输出同样命中前缀标记
+        assert f.classify(".mc-ffmpeg-part.a-encoded") is FileAction.SKIP
+        assert f.classify(".state.json.mc-part") is FileAction.SKIP
+        # 前缀匹配大小写不敏感（与 patterns 的归一规则一致）
+        assert f.classify(".MC-FFMPEG-PART.a.mp4") is FileAction.SKIP
+        # 普通文件不受影响：passthrough 全匹配下仍走直传
+        assert f.classify("a.mp4") is FileAction.PASSTHROUGH
+
 
 class TestCheckMtime:
     def test_zero_threshold_always_passes(self):

@@ -69,7 +69,7 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
 
 **`conftest.py`**
 - `app_context`：初始化全局 AppContext——捕获型 `CaptureLogger` + **真实** `StateManager`（指向 tmp 目录）+ 默认 `GlobalConfig`；测试结束清理单例与处理器类级去重状态。
-- `stub_ffmpeg`：进程边界打桩（记录命令行 `calls` + 可配置行为 `state`：returncode / output / hangs / on_start）。
+- `stub_ffmpeg`：进程边界打桩（记录命令行 `calls` + 可配置行为 `state`：returncode / output / hangs / on_start；成功退出且未配置 `on_start` 时，自动向命令行末尾的 part 路径写出产物，模拟 ffmpeg 的产出）。
 - `run_task(task, now=None)`：灰盒测试统一入口。与生产装配路径对齐：任务字典先经加载期解析（`resolve_tasks`——任务模型校验 + 路径关系校验，错误日志在此给出，被拒绝的任务返回 None），再经 `create_handler` 构造处理器并执行，返回 handler 实例（供补充断言）。
 
 **`helpers.py`**
