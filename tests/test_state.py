@@ -25,18 +25,20 @@ OTHER_KEY = task_key("/data/source2", "/data/dest2")
 
 
 class TestKeys:
-    def test_task_key_stable_across_relative_forms(self, tmp_path):
+    def test_task_key_stable_across_relative_forms(self, tmp_path, monkeypatch):
         """相对/绝对形式归一到同一键（配置重排序与工作目录无关）。"""
-        os.chdir(tmp_path)
-        try:
-            a = task_key("./source", "./dest")
-            b = task_key(str(tmp_path / "source"), str(tmp_path / "dest"))
-            assert a == b
-        finally:
-            os.chdir(tmp_path.parent)
+        monkeypatch.chdir(tmp_path)
+        a = task_key("./source", "./dest")
+        b = task_key(str(tmp_path / "source"), str(tmp_path / "dest"))
+        assert a == b
 
     def test_file_key_normcases_path(self):
-        assert file_key("C:\\Media\\Video.MP4") == file_key("c:\\media\\video.mp4")
+        if os.name == "nt":
+            # Windows：NTFS 大小写不敏感，normcase 折叠大小写后指向同一条记录
+            assert file_key("C:\\Media\\Video.MP4") == file_key("c:\\media\\video.mp4")
+        else:
+            # POSIX：文件系统默认大小写敏感，normcase 为恒等，键保持区分
+            assert file_key("/Media/Video.MP4") != file_key("/Media/video.mp4")
 
 
 class TestFailureCounters:
