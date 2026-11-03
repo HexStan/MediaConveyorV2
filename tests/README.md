@@ -42,7 +42,7 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
 **原则二：白盒只补外部不可见的契约。**
 只有当行为从 `execute()` 入口无法观察（或观察成本畸高）时，才写白盒单元测试。当前属于这一类的契约：
 - **ffprobe 输出解析**：JSON 字段到媒体属性字典的映射、异常降级为全零默认值（`test_media_probe.py`）；
-- **命令模板填充**：`{input}`/`{output}` 之外的花括号显式报错、多行合并（`test_media_ffmpeg.py`）；
+- **命令模板填充**：`{input}`/`{output}` 值按运行平台自动加引号、其他花括号显式报错、多行合并，`output_filename` 模板仅支持 `{basename}`（`test_media_ffmpeg.py`）；
 - **输出流解析与节流**：`\r`/`\n` 行拆分、`time=`/`speed=` 进度行识别、5 秒节流（`test_media_ffmpeg.py`）；
 - **状态库记录语义**：成功快照（size/mtime）与失败计数是"重处理判定"的唯一依据，任务键隔离需按 (task_key, filepath) 精确钉死（`test_state.py`）；
 - **单位语义**：容量 KB=1000/KiB=1024、码率十进制词头，无效配置显式报错（`test_media_parsing.py`）。

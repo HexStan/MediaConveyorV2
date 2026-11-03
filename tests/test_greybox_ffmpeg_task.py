@@ -43,7 +43,8 @@ def ffmpeg_task(source, dest, **overrides):
     task = {
         "source_dir": str(source),
         "dest_dir": str(dest),
-        "ffmpeg_cmd": 'ffmpeg -y -i "{input}" "{output}-encoded.mp4"',
+        "ffmpeg_cmd": "ffmpeg -y -i {input} {output}",
+        "output_filename": "{basename}-encoded.mp4",
     }
     if filter_cfg:
         task["filter"] = filter_cfg
@@ -78,11 +79,10 @@ class TestFFmpegTask:
 
         # 源文件默认保留在原位置
         assert snapshot(task["source_dir"]) == {"a.mp4": 5}
-        # 命令行包含 {input}/{output} 的填充结果（输出不含扩展名）
-        assert f'"{task["source_dir"]}\\a.mp4"' in calls[0] or (
-            f'"{task["source_dir"]}/a.mp4"' in calls[0]
-        )
-        assert f'"{os.path.join(task["dest_dir"], "a")}-encoded.mp4"' in calls[0]
+        # 命令行包含 {input}/{output} 的填充结果（引号由程序按平台添加，
+        # 引或不引均包含裸路径子串）
+        assert os.path.join(task["source_dir"], "a.mp4") in calls[0]
+        assert os.path.join(task["dest_dir"], "a-encoded.mp4") in calls[0]
         # 状态库记录成功与源文件快照
         success = state().get_success_state(
             key_of(task), file_key(os.path.join(task["source_dir"], "a.mp4"))
@@ -98,8 +98,8 @@ class TestFFmpegTask:
 
         run_task(task, now=NOW)
 
-        expected_base = os.path.join(task["dest_dir"], "sub", "dir", "a")
-        assert f'"{expected_base}-encoded.mp4"' in calls[0]
+        expected_output = os.path.join(task["dest_dir"], "sub", "dir", "a-encoded.mp4")
+        assert expected_output in calls[0]
 
     def test_passthrough_moves_directly(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
@@ -225,7 +225,7 @@ class TestFailures:
             tmp_path / "src",
             tmp_path / "dest",
             fallback_count=3,
-            ffmpeg_cmd_fallback='ffmpeg -fallback -i "{input}" "{output}-fb.mp4"',
+            ffmpeg_cmd_fallback="ffmpeg -fallback -i {input} {output}",
         )
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
@@ -243,7 +243,7 @@ class TestFailures:
             tmp_path / "src",
             tmp_path / "dest",
             fallback_count=2,
-            ffmpeg_cmd_fallback='ffmpeg -fallback -i "{input}" "{output}-fb.mp4"',
+            ffmpeg_cmd_fallback="ffmpeg -fallback -i {input} {output}",
         )
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
@@ -262,7 +262,7 @@ class TestFailures:
             tmp_path / "src",
             tmp_path / "dest",
             fallback_count=1,
-            ffmpeg_cmd_fallback='ffmpeg -fallback -i "{input}" "{output}-fb.mp4"',
+            ffmpeg_cmd_fallback="ffmpeg -fallback -i {input} {output}",
         )
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
@@ -302,7 +302,7 @@ class TestFailures:
         fstate["on_start"] = fake_ffmpeg_writes
         task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
-        # 处理前已存在的同名前缀文件不受清理影响
+        # 处理前已存在的文件不受清理影响
         dest_dir = os.path.join(str(tmp_path), "dest")
         os.makedirs(dest_dir, exist_ok=True)
         with open(os.path.join(dest_dir, "other-encoded.mp4"), "wb") as f:
@@ -310,8 +310,10 @@ class TestFailures:
 
         run_task(task, now=NOW)
 
+        # 清理精确匹配声明的输出文件名：残留的输出本体被删，
+        # 旁路写出的 a.log 与处理前已存在的文件均不动
         assert not os.path.exists(os.path.join(dest_dir, "a-encoded.mp4"))
-        assert not os.path.exists(os.path.join(dest_dir, "a.log"))
+        assert os.path.exists(os.path.join(dest_dir, "a.log"))
         assert os.path.exists(os.path.join(dest_dir, "other-encoded.mp4"))
 
 

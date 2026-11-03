@@ -6,35 +6,80 @@ Popen 是进程边界允许打桩的接缝（tests/README.md 原则三，桩见 
 """
 
 import subprocess
+import sys
 
 import pytest
 
 from src.app.lifecycle import LifecycleCoordinator
-from src.core.media.ffmpeg import TemplateFormatError, build_command, run_ffmpeg
+from src.core.media.ffmpeg import (
+    TemplateFormatError,
+    build_command,
+    render_output_filename,
+    run_ffmpeg,
+)
 from src.fs import TransferAbortedError
 
 
+@pytest.fixture
+def posix_shell(monkeypatch):
+    """引号断言与运行平台解耦：统一钉死为 POSIX（shlex 单引号规则）。"""
+    monkeypatch.setattr(sys, "platform", "linux")
+
+
 class TestBuildCommand:
-    def test_fills_placeholders(self):
-        cmd = build_command('ffmpeg -i "{input}" "{output}.mp4"', "/src/a b.mp4", "/dest/a b")
+    def test_quotes_unsafe_values(self, posix_shell):
+        cmd = build_command("ffmpeg -i {input} {output}", "/src/a b.mp4", "/dest/a b.mp4")
 
-        assert cmd == 'ffmpeg -i "/src/a b.mp4" "/dest/a b.mp4"'
+        assert cmd == "ffmpeg -i '/src/a b.mp4' '/dest/a b.mp4'"
 
-    def test_multiline_merged_to_single_line(self):
-        cmd = build_command('ffmpeg -y \\\n  -i "{input}" \\\n  "{output}.mp4"', "/in", "/out")
+    def test_safe_values_stay_unquoted(self, posix_shell):
+        cmd = build_command("ffmpeg -i {input} {output}", "/src/a.mp4", "/dest/a.mp4")
+
+        assert cmd == "ffmpeg -i /src/a.mp4 /dest/a.mp4"
+
+    def test_windows_values_double_quoted(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+        cmd = build_command("ffmpeg -i {input} {output}", "C:\\src\\a b.mp4", "C:\\dest\\a b.mp4")
+
+        assert cmd == 'ffmpeg -i "C:\\src\\a b.mp4" "C:\\dest\\a b.mp4"'
+
+    def test_windows_trailing_backslash_escaped(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+        cmd = build_command("ffmpeg -i {input}", "C:\\src\\", "C:\\out")
+
+        assert cmd == 'ffmpeg -i "C:\\src\\\\"'
+
+    def test_multiline_merged_to_single_line(self, posix_shell):
+        cmd = build_command("ffmpeg -y \\\n  -i {input} \\\n  {output}", "/in a.mp4", "/out b.mp4")
 
         assert "\n" not in cmd
         assert "\r" not in cmd
-        assert '-i "/in"' in cmd
-        assert '"/out.mp4"' in cmd
+        assert "-i '/in a.mp4'" in cmd
+        assert "'/out b.mp4'" in cmd
 
-    def test_unknown_placeholder_raises(self):
+    def test_unknown_placeholder_raises(self, posix_shell):
         with pytest.raises(TemplateFormatError, match="占位符"):
             build_command("ffmpeg {oops}", "/in", "/out")
 
-    def test_empty_braces_raise(self):
+    def test_empty_braces_raise(self, posix_shell):
         with pytest.raises(TemplateFormatError):
             build_command("ffmpeg {}", "/in", "/out")
+
+
+class TestRenderOutputFilename:
+    def test_renders_basename(self):
+        assert render_output_filename("{basename}-encoded.mp4", "a b") == "a b-encoded.mp4"
+
+    def test_basename_expandable_multiple_times(self):
+        assert render_output_filename("{basename}-{basename}.mp4", "a") == "a-a.mp4"
+
+    def test_unknown_placeholder_raises(self):
+        with pytest.raises(TemplateFormatError, match="basename"):
+            render_output_filename("{output}.mp4", "a")
+
+    def test_empty_braces_raise(self):
+        with pytest.raises(TemplateFormatError):
+            render_output_filename("{}.mp4", "a")
 
 
 class TestRunFFmpeg:

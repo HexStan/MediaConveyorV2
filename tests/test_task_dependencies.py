@@ -31,7 +31,8 @@ def _task(**extra):
     task = {
         "source_dir": "s",
         "dest_dir": "d",
-        "ffmpeg_cmd": 'ffmpeg -i "{input}" "{output}.mp4"',
+        "ffmpeg_cmd": "ffmpeg -i {input} {output}",
+        "output_filename": "{basename}.mp4",
     }
     task.update(extra)
     return task
@@ -217,7 +218,8 @@ def _passthrough_task(src, dest, **extra):
     task = {
         "source_dir": str(src),
         "dest_dir": str(dest),
-        "ffmpeg_cmd": 'ffmpeg -i "{input}" "{output}.mp4"',
+        "ffmpeg_cmd": "ffmpeg -i {input} {output}",
+        "output_filename": "{basename}.mp4",
         "filter": {"passthrough_patterns": ["*"]},
     }
     task.update(extra)
@@ -264,6 +266,7 @@ class TestRunTasksOrchestration:
             "source_dir": str(tmp_path / "src-a"),
             "dest_dir": str(tmp_path / "dest-a"),
             "ffmpeg_cmd": "ffmpeg {oops}",
+            "output_filename": "{basename}.mp4",
             "id": "a",
         }
         second = _passthrough_task(
@@ -348,6 +351,7 @@ class TestRunTasksOrchestration:
             "source_dir": str(tmp_path / "src-a"),
             "dest_dir": str(tmp_path / "dest-a"),
             "ffmpeg_cmd": "ffmpeg {oops}",
+            "output_filename": "{basename}.mp4",
             "id": "a",
         }
         second = _passthrough_task(

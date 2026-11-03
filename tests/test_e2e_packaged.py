@@ -82,13 +82,15 @@ def _assert_ok(result):
 
 
 def _ffmpeg_task_toml(src, dest, *, filter_body=""):
-    """单任务节：直传过滤占位（ffmpeg_cmd 是 TOML 字面量字符串，花括号单写——
-    模板经 str.format 填充后即得真实路径；真实执行由 TestBundledFFmpegTranscode 覆盖）。"""
+    """单任务节：直传过滤占位（ffmpeg_cmd 与 output_filename 均为 TOML
+    字面量字符串，花括号单写——模板经 str.format 填充后即得真实路径；
+    真实执行由 TestBundledFFmpegTranscode 覆盖）。"""
     filter_block = f"\n[tasks.filter]\n{filter_body}" if filter_body else ""
     return (
         f'source_dir = "{src}"\n'
         f'dest_dir = "{dest}"\n'
-        'ffmpeg_cmd = \'ffmpeg -y -i "{input}" "{output}.mp4"\'\n'
+        "ffmpeg_cmd = 'ffmpeg -y -i {input} {output}'\n"
+        'output_filename = "{basename}.mp4"\n'
         f"{filter_block}"
     )
 

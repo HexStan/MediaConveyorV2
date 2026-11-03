@@ -1,7 +1,9 @@
 """单元测试：FFmpeg 任务配置模型（加载期校验收口的契约）。
 
 钉死的契约：
-- source_dir / dest_dir / ffmpeg_cmd 必填，extra="forbid" 拒绝未知字段；
+- source_dir / dest_dir / ffmpeg_cmd / output_filename 必填，
+  extra="forbid" 拒绝未知字段；
+- output_filename 模板仅支持 {basename}，渲染结果必须是纯文件名；
 - 数字字段接受数字字符串（lax 强转），布尔值一律拒绝；
 - 过滤条件的范围值在加载期解析：非法值得到明确的中文错误，而不是
   运行期被静默当作 0；
@@ -19,7 +21,8 @@ def make_task(**overrides) -> dict:
     task = {
         "source_dir": "./source",
         "dest_dir": "./dest",
-        "ffmpeg_cmd": 'ffmpeg -i "{input}" "{output}.mp4"',
+        "ffmpeg_cmd": "ffmpeg -i {input} {output}",
+        "output_filename": "{basename}.mp4",
     }
     task.update(overrides)
     return task
@@ -31,6 +34,7 @@ class TestRequiredFields:
 
         assert config.source_dir == "./source"
         assert config.dest_dir == "./dest"
+        assert config.output_filename == "{basename}.mp4"
         assert config.failure_count == 3
         assert config.fallback_count == 0
         assert config.ffmpeg_timeout == 0
@@ -40,7 +44,7 @@ class TestRequiredFields:
         assert config.backup_dir == ""
         assert config.ffmpeg_cmd_fallback == ""
 
-    @pytest.mark.parametrize("field", ["source_dir", "dest_dir", "ffmpeg_cmd"])
+    @pytest.mark.parametrize("field", ["source_dir", "dest_dir", "ffmpeg_cmd", "output_filename"])
     def test_missing_required_field_rejected(self, field):
         task = make_task()
         del task[field]
@@ -84,10 +88,38 @@ class TestFieldCoercion:
 
     def test_multiline_cmd_preserved(self):
         config = TaskConfig.model_validate(
-            make_task(ffmpeg_cmd='ffmpeg -y \\\n  -i "{input}" \\\n  "{output}.mp4"')
+            make_task(ffmpeg_cmd="ffmpeg -y \\\n  -i {input} \\\n  {output}")
         )
 
         assert "\n" in config.ffmpeg_cmd
+
+
+class TestOutputFilenameValidation:
+    """output_filename 的加载期校验：占位符支持项与纯文件名形状。"""
+
+    def test_template_preserved(self):
+        config = TaskConfig.model_validate(make_task(output_filename="{basename}-encoded.mp4"))
+
+        assert config.output_filename == "{basename}-encoded.mp4"
+
+    def test_unknown_placeholder_rejected(self):
+        with pytest.raises(ValidationError, match="output_filename 模板"):
+            TaskConfig.model_validate(make_task(output_filename="{output}.mp4"))
+
+    def test_empty_braces_rejected(self):
+        with pytest.raises(ValidationError, match="output_filename 模板"):
+            TaskConfig.model_validate(make_task(output_filename="{}.mp4"))
+
+    def test_path_separators_rejected(self):
+        with pytest.raises(ValidationError, match="纯文件名"):
+            TaskConfig.model_validate(make_task(output_filename="sub/{basename}.mp4"))
+
+        with pytest.raises(ValidationError, match="纯文件名"):
+            TaskConfig.model_validate(make_task(output_filename="..\\{basename}.mp4"))
+
+    def test_dot_names_rejected(self):
+        with pytest.raises(ValidationError, match="纯文件名"):
+            TaskConfig.model_validate(make_task(output_filename=".."))
 
 
 class TestFallbackValidation:
@@ -97,7 +129,7 @@ class TestFallbackValidation:
 
     def test_fallback_with_cmd_accepted(self):
         config = TaskConfig.model_validate(
-            make_task(fallback_count=3, ffmpeg_cmd_fallback='ffmpeg "{input}" "{output}.mp4"')
+            make_task(fallback_count=3, ffmpeg_cmd_fallback="ffmpeg -fallback -i {input} {output}")
         )
 
         assert config.fallback_count == 3

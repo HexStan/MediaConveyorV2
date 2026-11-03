@@ -49,7 +49,8 @@ def ffmpeg_task(tmp_path):
     task = {
         "source_dir": str(tmp_path / "src"),
         "dest_dir": str(tmp_path / "dest"),
-        "ffmpeg_cmd": 'ffmpeg -i "{input}" "{output}.mp4"',
+        "ffmpeg_cmd": "ffmpeg -i {input} {output}",
+        "output_filename": "{basename}.mp4",
         "filter": {"passthrough_patterns": ["*"]},
     }
     os.makedirs(task["dest_dir"], exist_ok=True)
