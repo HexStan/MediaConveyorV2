@@ -12,9 +12,11 @@ CI 中由 executable-build.yml 在构建后设置该变量执行。
 
 驱动子进程属于进程边界，符合 tests/README.md 原则三。
 
-场景设计：全部任务配置 passthrough_patterns 直传（不经 FFmpeg，任意
-字节皆可）——FFmpeg 执行路径已由灰盒测试在进程边界打桩覆盖，此处钉
-的是 TOML 形状与冻结布局，不引入对真实 ffmpeg 的依赖。
+场景设计：既有任务配置 passthrough_patterns 直传（不经 FFmpeg，任意
+字节皆可），也有借助包内内置 FFmpeg 的真实转码——FFmpeg 执行语义已由
+灰盒测试在进程边界打桩覆盖，直传场景钉的是 TOML 形状与冻结布局；真实
+转码场景覆盖"可执行版内置 FFmpeg 可被命令模板解析并完成处理"的链路
+（CI runner 不预装 ffmpeg，内置前该链路无法在打包产物上验证）。
 
 时钟说明（对原则四的偏离及理由）：打包二进制无法注入 now，只能使用真实
 时钟。测试仅依赖「真实当前时刻远超 make_tree 固定的过去时间戳 OLD」这一
@@ -29,7 +31,7 @@ import subprocess
 import pytest
 
 from src.platform_info import exe_name
-from tests.helpers import make_tree, snapshot
+from tests.helpers import OLD, make_tree, snapshot
 
 PROGRAM_DIR = os.environ.get("MEDIACONVEYOR_BIN")
 
@@ -80,14 +82,20 @@ def _assert_ok(result):
 
 
 def _ffmpeg_task_toml(src, dest, *, filter_body=""):
-    """单任务节：直传过滤占位（f-string 中 ffmpeg_cmd 的花括号需双写）。"""
+    """单任务节：直传过滤占位（ffmpeg_cmd 是 TOML 字面量字符串，花括号单写——
+    模板经 str.format 填充后即得真实路径；真实执行由 TestBundledFFmpegTranscode 覆盖）。"""
     filter_block = f"\n[tasks.filter]\n{filter_body}" if filter_body else ""
     return (
         f'source_dir = "{src}"\n'
         f'dest_dir = "{dest}"\n'
-        'ffmpeg_cmd = \'ffmpeg -y -i "{{input}}" "{{output}}.mp4"\'\n'
+        'ffmpeg_cmd = \'ffmpeg -y -i "{input}" "{output}.mp4"\'\n'
         f"{filter_block}"
     )
+
+
+def _bundled_ffmpeg(program_dir):
+    """打包产物内的内置 ffmpeg 路径（spec 经 FFMPEG_STAGE 打入 _internal/ffmpeg/）。"""
+    return os.path.join(program_dir, "_internal", "ffmpeg", exe_name("ffmpeg"))
 
 
 @pytest.fixture
@@ -189,3 +197,56 @@ class TestFFmpegTaskViaBinary:
         assert snapshot(tmp_path / "dest-a") == {"a.txt": 5}
         assert snapshot(tmp_path / "src-b") == {}
         assert snapshot(tmp_path / "dest-b") == {"b.txt": 4}
+
+
+class TestBundledFFmpegTranscode:
+    def test_real_transcode_via_bundled_ffmpeg(self, program_dir, tmp_path):
+        """内置 FFmpeg 的真实转码链路：先以包内 ffmpeg 合成测试视频
+        （lavfi 源，无外部依赖），再经 MediaConveyor 的命令模板转码进
+        目标目录——命令模板中的裸 ffmpeg 经 PATH 前置解析到内置版本
+        （src/app/paths.py），源文件处理后清空。"""
+        bundled = _bundled_ffmpeg(program_dir)
+        assert os.path.isfile(bundled), "发行包缺少内置 ffmpeg"
+
+        src = (tmp_path / "src").as_posix()
+        dest = (tmp_path / "dest").as_posix()
+        os.makedirs(src)
+        os.makedirs(dest)
+        video = os.path.join(src, "clip.mp4")
+        subprocess.run(
+            [
+                bundled,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=0.3:size=64x64:rate=10",
+                "-pix_fmt",
+                "yuv420p",
+                video,
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        # 合成产物钉到历史时间，绕开写入稳定性等待（同 make_tree 的时钟约定）
+        os.utime(video, (OLD, OLD))
+        os.utime(src, (OLD, OLD))
+
+        _write_config(
+            program_dir,
+            # remove_source：FFmpeg 成功后的默认善后是保留源文件（remove_source
+            # 默认 False），此处开启删除以断言完整的"消费-产出"链路
+            'log_dir = "./logs"\n\n[[tasks]]\n'
+            + _ffmpeg_task_toml(src, dest)
+            + "remove_source = true\n",
+        )
+
+        result = _run_binary(program_dir)
+
+        _assert_ok(result)
+        assert snapshot(tmp_path / "src") == {}
+        dest_files = snapshot(tmp_path / "dest")
+        # 转码产物大小取决于编码器，只断言文件落位且非空
+        assert list(dest_files) == ["clip.mp4"]
+        assert dest_files["clip.mp4"] > 0

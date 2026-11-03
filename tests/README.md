@@ -31,7 +31,7 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
 | 白盒·run-once 前置判定 | `test_control_run_once.py` | 子命令预检（存活 + 休眠期）与受理回执等待 | 真实锁原语 + 真实状态文件 |
 | 白盒·quiet 确认返回 | `test_control_quiet.py` | `start --quiet` 启动确认等待与 `run-once --quiet` 的受理/未受理返回分支 | 真实锁原语 + 真实状态文件；`_spawn_detached` 进程边界打桩 |
 | 白盒·文件系统原语 | `test_fs_scan.py` / `test_fs_abort.py` / `test_atomic_write.py` | scan 查询、chunk 边界中止、原子写入 | 真实文件系统 + 中止钩子注入 |
-| 白盒·路径解析 | `test_app_paths.py` | 应用根目录锚定（仓库根 vs 可执行文件目录） | 纯函数 |
+| 白盒·路径解析 | `test_app_paths.py` | 应用根目录锚定（仓库根 vs 可执行文件目录）+ 内置 FFmpeg 解析与 PATH 前置 | 纯函数（冻结标记 monkeypatch 注入） |
 | 端到端·打包产物 | `test_e2e_packaged.py` | PyInstaller 产物（main 入口） | 子进程驱动；`MEDIACONVEYOR_BIN` 未设置时整体跳过 |
 
 ## 编写原则
@@ -79,12 +79,15 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
 
 ## 端到端：打包产物（条件启用）
 
-`test_e2e_packaged.py` 以黑盒方式驱动 PyInstaller 打包产物，覆盖灰盒够不到的两段链路：
+`test_e2e_packaged.py` 以黑盒方式驱动 PyInstaller 打包产物，覆盖灰盒够不到的三段链路：
 
 1. **TOML 配置形状 → 任务字典**：灰盒直接传入 Python 字典，绕过了 ConfigManager；
    端到端走真实的 config.toml 加载路径，钉死任务/过滤块在 TOML 中的写法；
 2. **打包布局与入口启动**：冻结形态下应用根目录 = 可执行文件所在目录
-   （`src/app/paths.py`），打包缺失模块、入口崩溃等只有真实产物能暴露。
+   （`src/app/paths.py`），打包缺失模块、入口崩溃等只有真实产物能暴露；
+3. **内置 FFmpeg 真实转码**：先以包内 `_internal/ffmpeg/ffmpeg` 合成测试视频
+   （lavfi 源），再经命令模板中的裸 `ffmpeg` 转码——PATH 前置
+   （`src/app/paths.py`）与内置二进制可执行性只有真实产物能验证。
 
 约定：
 
