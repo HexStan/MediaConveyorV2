@@ -30,6 +30,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.core.media.ffmpeg import TemplateFormatError, render_output_filename
 from src.core.media.parsing import (
     InvalidBitrateError,
     InvalidDurationError,
@@ -187,6 +188,9 @@ class TaskConfig(BaseModel):
 
     # FFmpeg 命令模板（{input}/{output} 占位符），多行书写合法
     ffmpeg_cmd: Annotated[str, StringConstraints(min_length=1)]
+    # 输出文件名模板（{basename} = 源文件名不含扩展名），主/备命令共用；
+    # {output} 的值即本模板的渲染结果拼 dest 子目录而成
+    output_filename: Annotated[str, StringConstraints(min_length=1)]
     # 主命令连续失败 fallback_count 次后启用的备用命令模板
     ffmpeg_cmd_fallback: str = ""
     fallback_count: CountValue = Field(default=0, ge=0)
@@ -207,4 +211,22 @@ class TaskConfig(BaseModel):
         """配置了 fallback_count 但没有备用命令：切换条件永不满足，属配置错误。"""
         if self.fallback_count > 0 and not self.ffmpeg_cmd_fallback:
             raise ValueError("配置了 fallback_count 时必须同时配置 ffmpeg_cmd_fallback")
+        return self
+
+    @model_validator(mode="after")
+    def _check_output_filename(self) -> Self:
+        """output_filename 模板校验：占位符支持项与渲染结果的形状。
+
+        用哑 basename 试渲染即可钉死全部模板错误（渲染结果只取决于模板
+        形状，与真实文件名无关）；渲染结果必须是纯文件名——不允许路径
+        分隔符与 . / ..，保证输出永远落在 dest_dir 的子树内。
+        """
+        try:
+            rendered = render_output_filename(self.output_filename, "probe")
+        except TemplateFormatError as e:
+            raise ValueError(str(e)) from e
+        if "/" in rendered or "\\" in rendered or rendered in (".", ".."):
+            raise ValueError(
+                f"output_filename 渲染结果 {rendered!r} 不是纯文件名（不允许路径分隔符与 . / ..）"
+            )
         return self

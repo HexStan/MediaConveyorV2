@@ -1,5 +1,10 @@
 """FFmpeg 命令执行：模板填充、子进程托管、进度流式输出与超时控制。
 
+模板填充分两步：output_filename 模板（仅 {basename}）先渲染出输出
+文件名，与 dest 子目录结构拼成 {output} 的值；命令模板再以
+{input}/{output} 填充。占位符的值由本模块按运行平台自动加引号，
+模板中无需手写引号；支持项之外的花括号占位符在填充期显式报错。
+
 子进程登记到生命周期协调器（register_process）：stop --fast 到达时
 整树终止，不留孤儿 ffmpeg；停止指令在输出流的轮询间隙被消费，中止
 以 TransferAbortedError 向上传播，与 fs 层的中止语义一致。
@@ -9,6 +14,7 @@
 """
 
 import queue
+import shlex
 import subprocess
 import threading
 import time
@@ -16,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from src.fs import TransferAbortedError
 from src.output.logger import Logger
+from src.platform_info import is_windows
 
 if TYPE_CHECKING:
     from src.app.lifecycle import LifecycleCoordinator
@@ -31,25 +38,59 @@ _ERROR_TAIL_LINES = 20
 
 
 class TemplateFormatError(ValueError):
-    """命令模板填充失败（模板含有 {input}/{output} 之外的占位符）。"""
+    """模板填充失败：命令模板含有 {input}/{output} 之外、output_filename
+    模板含有 {basename} 之外的占位符。"""
 
 
-def build_command(template: str, filepath: str, dst_basepath: str) -> str:
+def _shell_quote(value: str) -> str:
+    """按运行平台的 shell 语法为路径加引号（{input}/{output} 值的统一出口）。
+
+    - Windows：命令经 cmd.exe（shell=True）执行，其元字符（& | < > ^ 等）
+      在双引号内均按字面处理，故无条件双引号包裹；尾部反斜杠翻倍，防止
+      转义收尾引号。%VAR% 展开在引号内仍会发生，路径含成对 % 的极端
+      情形不受保护；
+    - POSIX（Linux / macOS / Docker）：shlex.quote，覆盖全部不安全字符，
+      安全字符不加引号。
+    """
+    if is_windows():
+        if value.endswith("\\"):
+            value += "\\"
+        return f'"{value}"'
+    return shlex.quote(value)
+
+
+def build_command(template: str, filepath: str, output_path: str) -> str:
     """填充命令模板并合并为单行。
 
-    - ``{input}`` → 源文件完整路径；``{output}`` → 目标目录下保持子目录
-      结构的基础文件名（不含扩展名），输出扩展名由模板自行决定；
+    - ``{input}`` → 源文件完整路径；``{output}`` → 输出文件完整路径
+      （文件名由任务的 output_filename 模板渲染，子目录结构随源文件）；
+    - 两个占位符的值由程序按运行平台自动加引号，模板中无需（也不应）
+      再手写引号；
     - 多行模板合并为单行（换行替换为空格），支持 TOML 多行字符串书写；
     - 模板中的其他花括号占位符会触发 KeyError，属配置错误，显式抛出
       TemplateFormatError（str.format 的既有语义）。
     """
     try:
-        raw = template.format(input=filepath, output=dst_basepath)
+        raw = template.format(input=_shell_quote(filepath), output=_shell_quote(output_path))
     except (KeyError, IndexError) as e:
         raise TemplateFormatError(
             f"命令模板含有不受支持的占位符: {e}（仅支持 {{input}} 与 {{output}}）"
         ) from e
     return raw.replace("\n", " ").replace("\r", " ")
+
+
+def render_output_filename(template: str, basename: str) -> str:
+    """渲染 output_filename 文件名模板（目前仅支持 ``{basename}``）。
+
+    渲染失败属配置错误，抛 TemplateFormatError——与命令模板错误一样
+    可在加载期判定：渲染结果只取决于模板形状，与真实文件名无关。
+    """
+    try:
+        return template.format(basename=basename)
+    except (KeyError, IndexError) as e:
+        raise TemplateFormatError(
+            f"output_filename 模板含有不受支持的占位符: {e}（仅支持 {{basename}}）"
+        ) from e
 
 
 def _consume_stderr(process: subprocess.Popen[str], lines: queue.Queue[str]) -> None:

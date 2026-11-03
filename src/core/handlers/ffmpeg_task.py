@@ -25,7 +25,12 @@ if TYPE_CHECKING:
 
 from src.app.context import AppContext
 from src.core.handlers.base import BaseTaskHandler
-from src.core.media.ffmpeg import TemplateFormatError, build_command, run_ffmpeg
+from src.core.media.ffmpeg import (
+    TemplateFormatError,
+    build_command,
+    render_output_filename,
+    run_ffmpeg,
+)
 from src.core.media.filter import FileFilter
 from src.core.media.probe import MediaInfo, empty_media_info, get_media_info
 from src.core.state import SuccessState, file_key, task_key
@@ -334,7 +339,8 @@ class FFmpegTaskHandler(BaseTaskHandler):
         filename = os.path.basename(entry.filepath)
         name = os.path.splitext(filename)[0]
         final_dest_dir = os.path.join(config.dest_dir, rel_dir)
-        dst_basepath = os.path.join(final_dest_dir, name)
+        out_filename = render_output_filename(config.output_filename, name)
+        dst_output_path = os.path.join(final_dest_dir, out_filename)
 
         use_fallback = (
             config.fallback_count > 0
@@ -347,7 +353,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
         else:
             ctx.logger.info(f"开始处理 {entry.rel_path}{duration_note}。")
 
-        cmd = build_command(template, entry.filepath, dst_basepath)
+        cmd = build_command(template, entry.filepath, dst_output_path)
         ctx.logger.debug(f"执行 FFmpeg 命令: {cmd}")
 
         ensure_dir(final_dest_dir)
@@ -373,7 +379,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
             state.increment_ffmpeg_failure(self._key, fkey)
         else:
             state.increment_failure(self._key, fkey)
-        self._cleanup_partial_output(final_dest_dir, existing_files, name)
+        self._cleanup_partial_output(final_dest_dir, existing_files, out_filename)
         self._stats.record_failed()
 
     def _duration_note(self, entry: _ScanEntry) -> str:
@@ -429,19 +435,20 @@ class FFmpegTaskHandler(BaseTaskHandler):
         clean_empty_dirs(config.source_dir)
 
     def _cleanup_partial_output(
-        self, final_dest_dir: str, existing_files: set[str], name: str
+        self, final_dest_dir: str, existing_files: set[str], out_filename: str
     ) -> None:
-        """删除 FFmpeg 失败后残留的不完整输出（以输出基础名开头的新增文件）。"""
-        if not os.path.isdir(final_dest_dir):
+        """删除 FFmpeg 失败后残留的不完整输出。
+
+        输出文件名由 output_filename 显式声明，清理精确匹配：只删本轮
+        新增且文件名恰为声明的输出文件的残留；处理前已存在的同名文件与
+        模板旁路写出的其他文件均不动。
+        """
+        if not os.path.isdir(final_dest_dir) or out_filename in existing_files:
             return
-        new_files = set(os.listdir(final_dest_dir)) - existing_files
-        for filename in new_files:
-            if not filename.startswith(name):
-                continue
-            path = os.path.join(final_dest_dir, filename)
-            if os.path.isfile(path):
-                with contextlib.suppress(OSError):
-                    os.remove(path)
+        path = os.path.join(final_dest_dir, out_filename)
+        if os.path.isfile(path):
+            with contextlib.suppress(OSError):
+                os.remove(path)
 
     # ---- 提示去重 ---------------------------------------------------------
 
