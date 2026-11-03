@@ -66,25 +66,31 @@ source_dir = "./source"
 # 【必填】目标目录：处理输出目录（保持源目录的子目录结构）
 dest_dir = "./dest"
 
-# 【必填】FFmpeg 命令模板：{input} → 源文件完整路径；{output} → 目标文件基础名
-#（不含扩展名，输出扩展名由模板决定）；路径要加引号。书写规则详见 README 第三步
+# 【必填】FFmpeg 命令模板：{input} → 源文件完整路径；{output} → 输出文件完整路径
+#（文件名由 output_filename 决定）。占位符由程序按平台自动加引号，无需手写。
+# 书写规则详见 README 第三步
 ffmpeg_cmd = """
 ffmpeg -y \
-  -i "{input}" \
+  -i {input} \
   -c:v libx264 \
   -preset fast \
   -crf 23 \
-  "{output}-encoded.mp4"
+  {output}
 """
 
+# 【必填】输出文件名模板：{basename} → 源文件名（不含扩展名），
+# 输出扩展名直接写在模板里；须为纯文件名（不允许路径分隔符）
+output_filename = "{basename}-encoded.mp4"
+
 # 【选填】备用命令模板：主命令连续失败 fallback_count 次后启用
+#（与主命令共用 output_filename）
 # ffmpeg_cmd_fallback = """
 # ffmpeg -y \
-#   -i "{input}" \
+#   -i {input} \
 #   -c:v libx264 \
 #   -preset medium \
 #   -crf 28 \
-#   "{output}-encoded.mp4"
+#   {output}
 # """
 
 # 【选填】主命令连续失败多少次后切换备用命令；默认 0
@@ -169,11 +175,13 @@ source_dir = "./music"
 dest_dir = "./audio"
 ffmpeg_cmd = """
 ffmpeg -y \
-  -i "{input}" \
+  -i {input} \
   -c:a libmp3lame \
   -q:a 2 \
-  "{output}.mp3"
+  {output}
 """
+
+output_filename = "{basename}.mp3"
 
 [tasks.filter]
 include_patterns = ["*.flac", "*.wav"]

@@ -118,7 +118,7 @@
 
 ### 第三步：创建任务
 
-每个 `[[tasks]]` 节定义一个监听与处理任务。源目录、目标目录与 FFmpeg 命令为必填：
+每个 `[[tasks]]` 节定义一个监听与处理任务。源目录、目标目录、FFmpeg 命令与输出文件名模板为必填：
 
 ```toml
 [[tasks]]
@@ -128,15 +128,21 @@ source_dir = "./source"                     # 【必填】源目录（递归扫�
 dest_dir = "./dest"                         # 【必填】目标目录（保持子目录结构）
 ffmpeg_cmd = """
 ffmpeg -y \
-  -i "{input}" \
+  -i {input} \
   -c:v libx264 \
   -preset fast \
   -crf 23 \
-  "{output}-encoded.mp4"
+  {output}
 """                                          # 【必填】FFmpeg 命令模板
+output_filename = "{basename}-encoded.mp4"   # 【必填】输出文件名模板
 ```
 
-> **占位符说明**：`{input}` → 源文件完整路径；`{output}` → 目标目录下保持子目录结构的基础文件名（不含扩展名）。命令支持多行书写，执行时自动合并为单行；路径要加引号。模板中不能出现 `{input}`/`{output}` 之外的花括号占位符。
+> **占位符说明**：
+>
+> - `{input}` → 源文件完整路径；`{output}` → 输出文件完整路径（目标目录下保持子目录结构，文件名由 `output_filename` 渲染决定）。
+> - 两个占位符的值由程序按运行平台自动加引号，模板中**无需手写引号**（手写会与之叠加导致路径错误）。
+> - `output_filename` 中可用 `{basename}`（源文件名不含扩展名），输出扩展名直接写在模板里；须为纯文件名，不允许出现路径分隔符。
+> - 命令支持多行书写，执行时自动合并为单行。命令模板与 `output_filename` 中均不能出现支持项之外的花括号占位符。
 
 ### 第四步：选择源文件去向
 
@@ -221,14 +227,16 @@ failure_count = 3
 
 ffmpeg_cmd_fallback = """
 ffmpeg -y \
-  -i "{input}" \
+  -i {input} \
   -c:v libx264 \
   -preset medium \
   -crf 28 \
-  "{output}-encoded.mp4"
+  {output}
 """
 fallback_count = 3   # 主命令连续失败 3 次后启用备用命令（此后持续使用备用命令）
 ```
+
+> 备用命令与主命令共用 `output_filename`，无需单独配置输出文件名。
 
 ### 第八步：多任务与依赖（可选）
 
