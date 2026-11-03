@@ -22,7 +22,7 @@ def fmt_timespan(seconds: float) -> str:
 class TaskStats(Protocol):
     """任务统计接口（结构化协议）。
 
-    生产实现为 core.types.TranscodeStats；output 层不反向依赖 core，
+    生产实现为 core.types.TaskRunStats；output 层不反向依赖 core，
     故以协议声明本模块消费的最小统计面。
     """
 
@@ -70,7 +70,7 @@ def print_task_header(
 
 def print_task_summary(stats: TaskStats, duration: float, logger: Logger) -> None:
     """打印单轮任务的统计汇总。"""
-    parts = [f"转码 {stats.processed} 项"]
+    parts = [f"处理 {stats.processed} 项"]
     if stats.passthrough > 0:
         parts.append(f"直传 {stats.passthrough} 项")
     if stats.expired > 0:

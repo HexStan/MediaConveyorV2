@@ -1,4 +1,4 @@
-"""转码任务处理器：监听源目录，用 FFmpeg 处理音视频文件。
+"""FFmpeg 任务处理器：监听源目录，用 FFmpeg 处理音视频文件。
 
 单轮执行的完整流水线（对齐 v1 MediaConveyor 的 scanner + processor 组合）：
 
@@ -30,7 +30,7 @@ from src.core.media.filter import FileFilter
 from src.core.media.probe import MediaInfo, empty_media_info, get_media_info
 from src.core.state import SuccessState, file_key, task_key
 from src.core.task_config import TaskConfig
-from src.core.types import FileAction, TranscodeStats
+from src.core.types import FileAction, TaskRunStats
 from src.fs import (
     FsOpError,
     PathNotFoundError,
@@ -66,8 +66,8 @@ class _ScanReport:
     expired: list[tuple[str, str, str]] = field(default_factory=list)  # (rel, filepath, fkey)
 
 
-class TranscodeHandler(BaseTaskHandler):
-    """FFmpeg 转码任务处理器。"""
+class FFmpegTaskHandler(BaseTaskHandler):
+    """FFmpeg 任务处理器。"""
 
     # 源目录缺失的告警去重：处理器每轮重建，实例级集合没有记忆，
     # 用类级集合按目录去重（与 v1 Scanner._warned_dirs 语义一致）
@@ -79,11 +79,11 @@ class TranscodeHandler(BaseTaskHandler):
         super().__init__(spec, now)
         self._config: TaskConfig = self.task
         self._filter = FileFilter(self._config.filter)
-        self._stats = TranscodeStats()
+        self._stats = TaskRunStats()
         self._key = task_key(self._config.source_dir, self._config.dest_dir)
 
     @property
-    def stats(self) -> TranscodeStats:
+    def stats(self) -> TaskRunStats:
         """本轮执行的统计（灰盒测试断言用）。"""
         return self._stats
 
@@ -109,7 +109,7 @@ class TranscodeHandler(BaseTaskHandler):
                 for entry in report.entries:
                     if ctx.lifecycle.should_stop_before_file():
                         break
-                    self._process_entry(ctx, entry)
+                    self._handle_entry(ctx, entry)
         except TemplateFormatError as e:
             # 命令模板错误对所有文件必然复现，属配置级错误：
             # 中止本轮并给出明确报错，而不是把失败计数烧在每一个文件上
@@ -242,14 +242,14 @@ class TranscodeHandler(BaseTaskHandler):
 
     # ---- 逐文件处理 -----------------------------------------------------
 
-    def _process_entry(self, ctx: AppContext, entry: _ScanEntry) -> None:
+    def _handle_entry(self, ctx: AppContext, entry: _ScanEntry) -> None:
         try:
             if not self._check_stable(ctx, entry):
                 return
             if entry.action is FileAction.PASSTHROUGH:
                 self._passthrough(ctx, entry)
             else:
-                self._transcode(ctx, entry)
+                self._process(ctx, entry)
         except TransferAbortedError, TemplateFormatError:
             # fast 停止向上传播以中止本轮任务；命令模板错误属配置级错误，
             # 由 _execute 统一处理（不烧失败计数）
@@ -323,9 +323,9 @@ class TranscodeHandler(BaseTaskHandler):
         self._stats.record_passthrough(entry.size)
         clean_empty_dirs(config.source_dir)
 
-    # ---- FFmpeg 转码 -----------------------------------------------------
+    # ---- FFmpeg 处理 -----------------------------------------------------
 
-    def _transcode(self, ctx: AppContext, entry: _ScanEntry) -> None:
+    def _process(self, ctx: AppContext, entry: _ScanEntry) -> None:
         config = self._config
         state = ctx.require_state()
         fkey = file_key(entry.filepath)
@@ -388,7 +388,7 @@ class TranscodeHandler(BaseTaskHandler):
     def _handle_success(
         self, ctx: AppContext, entry: _ScanEntry, rel_dir: str, filename: str
     ) -> None:
-        """转码成功后的源文件善后：立即删除 / 延迟删除 / 备份 / 保留。"""
+        """FFmpeg 处理成功后的源文件善后：立即删除 / 延迟删除 / 备份 / 保留。"""
         config = self._config
         state = ctx.require_state()
         fkey = file_key(entry.filepath)
@@ -431,7 +431,7 @@ class TranscodeHandler(BaseTaskHandler):
     def _cleanup_partial_output(
         self, final_dest_dir: str, existing_files: set[str], name: str
     ) -> None:
-        """删除失败转码留下的不完整输出（以输出基础名开头的新增文件）。"""
+        """删除 FFmpeg 失败后残留的不完整输出（以输出基础名开头的新增文件）。"""
         if not os.path.isdir(final_dest_dir):
             return
         new_files = set(os.listdir(final_dest_dir)) - existing_files
@@ -447,12 +447,12 @@ class TranscodeHandler(BaseTaskHandler):
 
     def _warn_missing_source(self, ctx: AppContext) -> None:
         source = self._config.source_dir
-        if source not in TranscodeHandler._warned_dirs:
-            TranscodeHandler._warned_dirs.add(source)
+        if source not in FFmpegTaskHandler._warned_dirs:
+            FFmpegTaskHandler._warned_dirs.add(source)
             ctx.logger.warning(f"源目录不存在: {source}")
 
     def _log_monitoring_idle(self, ctx: AppContext) -> None:
         source = self._config.source_dir
-        if not TranscodeHandler._monitoring_logged.get(source):
-            TranscodeHandler._monitoring_logged[source] = True
+        if not FFmpegTaskHandler._monitoring_logged.get(source):
+            FFmpegTaskHandler._monitoring_logged[source] = True
             ctx.logger.info(f"未发现待处理文件，继续监听 {source}。")

@@ -62,7 +62,7 @@ def _parse_framerate(stream: dict[str, Any]) -> float:
 
 
 def _parse_streams(info: MediaInfo, streams: list[dict[str, Any]]) -> None:
-    """只取第一个视频流与第一个音频流（与主流转码场景一致）。"""
+    """只取第一个视频流与第一个音频流（与主流处理场景一致）。"""
     for stream in streams:
         codec_type = stream.get("codec_type")
         if codec_type == "video" and not info["video_codec"]:

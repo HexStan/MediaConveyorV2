@@ -44,7 +44,7 @@ def wait_until(condition, timeout=EXECUTE_TIMEOUT):
     return condition()
 
 
-def transcode_task(tmp_path):
+def ffmpeg_task(tmp_path):
     """直传观察任务：dest 预创建（生产前置条件）。"""
     task = {
         "source_dir": str(tmp_path / "src"),
@@ -119,7 +119,7 @@ def _state_phase_is(name, phase):
 
 class TestFirstRunDelay:
     def test_interval_first_run_delay_zero_executes_immediately(self, app_context, tmp_path):
-        task = transcode_task(tmp_path)
+        task = ffmpeg_task(tmp_path)
         make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600, "first_run_delay": 0}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
@@ -144,7 +144,7 @@ class TestFirstRunDelay:
         first_run_delay=0 测试（到点→执行）与 run-once 唤醒测试（睡眠
         打断→执行）夹逼，此处不再以真实墙钟覆盖流逝路径。
         """
-        task = transcode_task(tmp_path)
+        task = ffmpeg_task(tmp_path)
         make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600, "first_run_delay": 30}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
@@ -168,7 +168,7 @@ class TestFirstRunDelay:
         assert snapshot(task["dest_dir"]) == {}
 
     def test_cron_first_run_delay_zero_executes_immediately(self, app_context, tmp_path):
-        task = transcode_task(tmp_path)
+        task = ffmpeg_task(tmp_path)
         make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "cron", "cron_expr": "* * * * *", "first_run_delay": 0}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
@@ -196,7 +196,7 @@ class TestFirstRunDelay:
     def test_interval_without_first_run_delay_waits_for_next_tick(
         self, app_context, tmp_path, unique_instance
     ):
-        task = transcode_task(tmp_path)
+        task = ffmpeg_task(tmp_path)
         make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
@@ -245,7 +245,7 @@ class TestRunOnce:
     def test_run_once_interrupts_interval_sleep_and_recomputes_next_run(
         self, app_context, tmp_path, unique_instance
     ):
-        task = transcode_task(tmp_path)
+        task = ffmpeg_task(tmp_path)
         make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
@@ -272,7 +272,7 @@ class TestRunOnce:
         assert snapshot(task["source_dir"]) == {}
 
     def test_run_once_interrupts_cron_sleep(self, app_context, tmp_path, unique_instance):
-        task = transcode_task(tmp_path)
+        task = ffmpeg_task(tmp_path)
         make_tree(task["source_dir"], {"a.txt": b"alpha"})
         # 每月 1 日零点：休眠期足够长，执行与否完全取决于 run-once 唤醒
         schedule = {"mode": "cron", "cron_expr": "0 0 1 * *"}
@@ -291,7 +291,7 @@ class TestRunOnce:
 
     def test_run_once_interrupts_first_run_delay(self, app_context, tmp_path, unique_instance):
         """first_run_delay 等待期视为休眠期：run-once 可提前触发首轮。"""
-        task = transcode_task(tmp_path)
+        task = ffmpeg_task(tmp_path)
         make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600, "first_run_delay": 30}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)

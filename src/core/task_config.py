@@ -181,7 +181,7 @@ class TaskConfig(BaseModel):
     name: str | None = None
     depends_on: tuple[str, ...] = ()
     source_dir: Annotated[str, StringConstraints(min_length=1)]
-    # 转码没有目标目录即无意义，dest_dir 必填
+    # 没有目标目录的任务无意义，dest_dir 必填
     dest_dir: Annotated[str, StringConstraints(min_length=1)]
     filter: FilterConfig = Field(default_factory=FilterConfig)
 

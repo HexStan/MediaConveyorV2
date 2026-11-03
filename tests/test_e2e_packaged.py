@@ -79,7 +79,7 @@ def _assert_ok(result):
     )
 
 
-def _transcode_task_toml(src, dest, *, filter_body=""):
+def _ffmpeg_task_toml(src, dest, *, filter_body=""):
     """单任务节：直传过滤占位（f-string 中 ffmpeg_cmd 的花括号需双写）。"""
     filter_block = f"\n[tasks.filter]\n{filter_body}" if filter_body else ""
     return (
@@ -98,7 +98,7 @@ def program_dir(tmp_path):
     return str(target)
 
 
-class TestTranscodeViaBinary:
+class TestFFmpegTaskViaBinary:
     def test_passthrough_transfers_files(self, program_dir, tmp_path):
         """[[tasks]] + 嵌套 [tasks.filter] 的 TOML 形状（灰盒直接传字典，
         覆盖不到）：passthrough 命中的文件不经 FFmpeg 直传进目标目录，
@@ -110,7 +110,7 @@ class TestTranscodeViaBinary:
         _write_config(
             program_dir,
             'log_dir = "./logs"\n\n[[tasks]]\n'
-            + _transcode_task_toml(
+            + _ffmpeg_task_toml(
                 src, dest, filter_body='passthrough_patterns = ["*.txt", "*.log"]\n'
             ),
         )
@@ -141,7 +141,7 @@ class TestTranscodeViaBinary:
         _write_config(
             program_dir,
             'log_dir = "./logs"\n\n[[tasks]]\n'
-            + _transcode_task_toml(
+            + _ffmpeg_task_toml(
                 src,
                 dest,
                 filter_body=(
@@ -177,9 +177,9 @@ class TestTranscodeViaBinary:
             program_dir,
             'log_dir = "./logs"\n\n'
             '[[tasks]]\nid = "first"\n'
-            + _transcode_task_toml(src_a, dest_a, filter_body='passthrough_patterns = ["*"]\n')
+            + _ffmpeg_task_toml(src_a, dest_a, filter_body='passthrough_patterns = ["*"]\n')
             + '\n[[tasks]]\ndepends_on = ["first"]\n'
-            + _transcode_task_toml(src_b, dest_b, filter_body='passthrough_patterns = ["*"]\n'),
+            + _ffmpeg_task_toml(src_b, dest_b, filter_body='passthrough_patterns = ["*"]\n'),
         )
 
         result = _run_binary(program_dir)

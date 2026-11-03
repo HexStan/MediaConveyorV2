@@ -8,7 +8,7 @@ dest_dir) 归一化而来——多个任务监听重叠目录时状态互不串�
 记录的语义：
 - success_time 非 NULL 即"已成功处理过"，并附带成功时的源文件
   size/mtime——源文件内容变化（size 或 mtime 不再吻合）后视为未处理，
-  重新转码；
+  重新处理；
 - failure_count 达到任务级 failure_count 后永久跳过该文件；
 - ffmpeg_failure_count 专计主命令失败，达到 fallback_count 后切换
   备用命令；成功一次即双计数清零。

@@ -1,4 +1,4 @@
-"""灰盒测试：transcode 任务以真实文件系统 + 真实状态库为判定终态。
+"""灰盒测试：FFmpeg 任务以真实文件系统 + 真实状态库为判定终态。
 
 本项目会移动/删除用户的源文件，正确性以"目录树终态 + 状态库记录 +
 传给 ffmpeg 的命令行"三者的组合为断言对象（tests/README.md 分层策略）。
@@ -18,7 +18,7 @@ OLD = helpers.OLD
 RECENT = helpers.RECENT
 
 
-def transcode_task(source, dest, **overrides):
+def ffmpeg_task(source, dest, **overrides):
     """构造任务字典；过滤维度的键自动归位到 filter 子表。"""
     filter_keys = {
         "include_patterns",
@@ -64,14 +64,14 @@ def mark_success(task, filepath, size, mtime, success_time):
 
 
 # ============================================================
-# 基本转码流水线
+# 基本处理流水线
 # ============================================================
 
 
-class TestTranscode:
+class TestFFmpegTask:
     def test_success_keeps_source_and_records_state(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
         handler = run_task(task, now=NOW)
@@ -93,7 +93,7 @@ class TestTranscode:
 
     def test_subdir_structure_preserved_in_output_path(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         make_tree(task["source_dir"], {"sub/dir/a.mp4": b"video"})
 
         run_task(task, now=NOW)
@@ -103,7 +103,7 @@ class TestTranscode:
 
     def test_passthrough_moves_directly(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", passthrough_patterns=["*.srt"])
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", passthrough_patterns=["*.srt"])
         make_tree(task["source_dir"], {"a.srt": b"subs", "b.mp4": b"video"})
 
         handler = run_task(task, now=NOW)
@@ -119,7 +119,7 @@ class TestTranscode:
         self, run_task, tmp_path, stub_ffmpeg
     ):
         _calls, _state = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", ffmpeg_cmd="ffmpeg {oops}")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", ffmpeg_cmd="ffmpeg {oops}")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
         run_task(task, now=NOW)
@@ -142,7 +142,7 @@ class TestTranscode:
 
 class TestDisposition:
     def test_remove_source_immediately(self, run_task, tmp_path, stub_ffmpeg):
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", remove_source=True)
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", remove_source=True)
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
         run_task(task, now=NOW)
@@ -156,7 +156,7 @@ class TestDisposition:
         )
 
     def test_remove_source_delayed(self, run_task, tmp_path, stub_ffmpeg):
-        task = transcode_task(
+        task = ffmpeg_task(
             tmp_path / "src", tmp_path / "dest", remove_source=True, source_expired_minutes=60
         )
         make_tree(task["source_dir"], {"a.mp4": b"video"})
@@ -168,7 +168,7 @@ class TestDisposition:
         assert AppContext.get().logger.has("info", "60 分钟后删除")
 
     def test_backup_preserves_subdir(self, run_task, tmp_path, stub_ffmpeg):
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", backup_dir=str(tmp_path / "bak"))
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", backup_dir=str(tmp_path / "bak"))
         make_tree(task["source_dir"], {"sub/a.mp4": b"video"})
 
         handler = run_task(task, now=NOW)
@@ -178,7 +178,7 @@ class TestDisposition:
         assert handler.stats.processed == 1
 
     def test_keep_in_place_by_default(self, run_task, tmp_path, stub_ffmpeg):
-        task = transcode_task(tmp_path / "src", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
         run_task(task, now=NOW)
@@ -187,7 +187,7 @@ class TestDisposition:
         assert snapshot(task["dest_dir"]) == {}
 
     def test_empty_dirs_cleaned_after_success(self, run_task, tmp_path, stub_ffmpeg):
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", remove_source=True)
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", remove_source=True)
         make_tree(task["source_dir"], {"sub/a.mp4": b"video"})
 
         run_task(task, now=NOW)
@@ -207,7 +207,7 @@ class TestFailures:
         _calls, fstate = stub_ffmpeg
         fstate["returncode"] = 1
         fstate["output"] = b"error line\n"
-        task = transcode_task(tmp_path / "src", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
@@ -221,7 +221,7 @@ class TestFailures:
     def test_main_failure_counted_for_fallback_switch(self, run_task, tmp_path, stub_ffmpeg):
         _calls, fstate = stub_ffmpeg
         fstate["returncode"] = 1
-        task = transcode_task(
+        task = ffmpeg_task(
             tmp_path / "src",
             tmp_path / "dest",
             fallback_count=3,
@@ -239,7 +239,7 @@ class TestFailures:
 
     def test_fallback_command_used_after_threshold(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(
+        task = ffmpeg_task(
             tmp_path / "src",
             tmp_path / "dest",
             fallback_count=2,
@@ -258,7 +258,7 @@ class TestFailures:
     def test_fallback_failure_counts_as_normal_failure(self, run_task, tmp_path, stub_ffmpeg):
         _calls, fstate = stub_ffmpeg
         fstate["returncode"] = 1
-        task = transcode_task(
+        task = ffmpeg_task(
             tmp_path / "src",
             tmp_path / "dest",
             fallback_count=1,
@@ -276,7 +276,7 @@ class TestFailures:
 
     def test_failure_limit_permanently_skips(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", failure_count=2)
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", failure_count=2)
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
         fkey = file_key(filepath)
@@ -300,7 +300,7 @@ class TestFailures:
                 f.write(b"log")
 
         fstate["on_start"] = fake_ffmpeg_writes
-        task = transcode_task(tmp_path / "src", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
         # 处理前已存在的同名前缀文件不受清理影响
         dest_dir = os.path.join(str(tmp_path), "dest")
@@ -323,7 +323,7 @@ class TestFailures:
 class TestDeduplication:
     def test_already_processed_skipped(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
         mark_success(task, filepath, 5, OLD, NOW - 3600)
@@ -334,7 +334,7 @@ class TestDeduplication:
 
     def test_changed_source_reprocessed(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         filepath = os.path.join(task["source_dir"], "a.mp4")
         # 成功记录：旧大小 4；当前文件大小 5 → 视为变化
         make_tree(task["source_dir"], {"a.mp4": b"video"})
@@ -351,7 +351,7 @@ class TestDeduplication:
         """重处理后失败照样累积到上限（不会因记录曾成功而绕过限制）。"""
         calls, fstate = stub_ffmpeg
         fstate["returncode"] = 1
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", failure_count=1)
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", failure_count=1)
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
         mark_success(task, filepath, 4, OLD, NOW - 3600)  # 旧大小 ≠ 当前 5
@@ -374,7 +374,7 @@ class TestDeduplication:
 class TestExpiredCleanup:
     def test_expired_file_deleted_and_record_removed(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(
+        task = ffmpeg_task(
             tmp_path / "src", tmp_path / "dest", remove_source=True, source_expired_minutes=1
         )
         filepath = os.path.join(task["source_dir"], "a.mp4")
@@ -386,10 +386,10 @@ class TestExpiredCleanup:
         assert snapshot(task["source_dir"]) == {}
         assert state().get_success_state(key_of(task), file_key(filepath)) is None
         assert handler.stats.expired == 1
-        assert calls == []  # 过期清理不触发转码
+        assert calls == []  # 过期清理不触发 FFmpeg
 
     def test_not_yet_expired_kept(self, run_task, tmp_path, stub_ffmpeg):
-        task = transcode_task(
+        task = ffmpeg_task(
             tmp_path / "src", tmp_path / "dest", remove_source=True, source_expired_minutes=60
         )
         filepath = os.path.join(task["source_dir"], "a.mp4")
@@ -404,7 +404,7 @@ class TestExpiredCleanup:
         self, run_task, app_context, tmp_path, stub_ffmpeg
     ):
         """扫描与删除之间文件消失（竞态）：清记录、不报错（白盒驱动清理步骤）。"""
-        task = transcode_task(
+        task = ffmpeg_task(
             tmp_path / "src", tmp_path / "dest", remove_source=True, source_expired_minutes=1
         )
         filepath = os.path.join(task["source_dir"], "a.mp4")
@@ -429,7 +429,7 @@ class TestExpiredCleanup:
 class TestScanFiltering:
     def test_recent_mtime_skipped(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", filter={"file_mtime": 300})
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", filter={"file_mtime": 300})
         make_tree(task["source_dir"], {"a.mp4": (b"video", RECENT)})
 
         run_task(task, now=NOW)
@@ -439,7 +439,7 @@ class TestScanFiltering:
 
     def test_old_mtime_processed(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", filter={"file_mtime": 300})
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", filter={"file_mtime": 300})
         make_tree(task["source_dir"], {"a.mp4": (b"video", OLD)})
 
         run_task(task, now=NOW)
@@ -454,7 +454,7 @@ class TestScanFiltering:
             raise AssertionError("不应调用 ffprobe")
 
         monkeypatch.setattr("src.core.media.probe.subprocess.run", no_probe)
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", filter={"size": {"min": "1KB"}})
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", filter={"size": {"min": "1KB"}})
         make_tree(task["source_dir"], {"small.mp4": b"tiny", "big.mp4": b"v" * 2048})
 
         handler = run_task(task, now=NOW)
@@ -474,9 +474,7 @@ class TestScanFiltering:
 
         monkeypatch.setattr("src.core.media.probe.subprocess.run", fake_run)
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(
-            tmp_path / "src", tmp_path / "dest", filter={"duration": {"min": "60s"}}
-        )
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", filter={"duration": {"min": "60s"}})
         make_tree(task["source_dir"], {"short.mp4": b"a", "b.mp4": b"b"})
 
         handler = run_task(task, now=NOW)
@@ -487,7 +485,7 @@ class TestScanFiltering:
         assert handler.stats.processed == 0
 
     def test_missing_source_warns_once(self, run_task, tmp_path, stub_ffmpeg):
-        task = transcode_task(tmp_path / "no-such-dir", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "no-such-dir", tmp_path / "dest")
 
         run_task(task, now=NOW)
         run_task(task, now=NOW)
@@ -497,7 +495,7 @@ class TestScanFiltering:
         assert len(warnings) == 1
 
     def test_idle_monitoring_logged_once_per_idle_streak(self, run_task, tmp_path, stub_ffmpeg):
-        task = transcode_task(tmp_path / "src", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         make_tree(task["source_dir"], {})
 
         run_task(task, now=NOW)
@@ -508,7 +506,7 @@ class TestScanFiltering:
 
         # 有文件处理后复位：再次空闲会重新提示
         make_tree(task["source_dir"], {"a.srt": b"x"})
-        task2 = transcode_task(task["source_dir"], task["dest_dir"], passthrough_patterns=["*"])
+        task2 = ffmpeg_task(task["source_dir"], task["dest_dir"], passthrough_patterns=["*"])
         run_task(task2, now=NOW)
         run_task(task, now=NOW)
 
@@ -524,11 +522,13 @@ class TestScanFiltering:
 class TestStabilityAndStop:
     def test_size_change_skips_round(self, run_task, tmp_path, stub_ffmpeg, monkeypatch):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", stable_duration=0.05)
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", stable_duration=0.05)
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
         sizes = iter([100, 200])
-        monkeypatch.setattr("src.core.handlers.transcode.os.path.getsize", lambda path: next(sizes))
+        monkeypatch.setattr(
+            "src.core.handlers.ffmpeg_task.os.path.getsize", lambda path: next(sizes)
+        )
 
         handler = run_task(task, now=NOW)
 
@@ -538,11 +538,11 @@ class TestStabilityAndStop:
 
     def test_file_vanishing_during_check_skips(self, run_task, tmp_path, stub_ffmpeg, monkeypatch):
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest", stable_duration=0.05)
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", stable_duration=0.05)
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
         monkeypatch.setattr(
-            "src.core.handlers.transcode.os.path.getsize",
+            "src.core.handlers.ffmpeg_task.os.path.getsize",
             lambda path: (_ for _ in ()).throw(OSError("gone")),
         )
 
@@ -552,9 +552,9 @@ class TestStabilityAndStop:
         assert AppContext.get().logger.has("warning", "已不存在")
 
     def test_fast_stop_breaks_loop_between_files(self, run_task, tmp_path, stub_ffmpeg):
-        """fast 停止在文件边界优雅退出：不抛异常、不启动新转码、源文件原样。"""
+        """fast 停止在文件边界优雅退出：不抛异常、不启动新处理、源文件原样。"""
         calls, _fstate = stub_ffmpeg
-        task = transcode_task(tmp_path / "src", tmp_path / "dest")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
         # 模拟 stop --fast 已到达：文件循环在边界直接中断
@@ -576,8 +576,8 @@ class TestTaskIsolation:
         self, run_task, tmp_path, stub_ffmpeg
     ):
         calls, _fstate = stub_ffmpeg
-        task_a = transcode_task(tmp_path / "src", tmp_path / "dest-a")
-        task_b = transcode_task(tmp_path / "src", tmp_path / "dest-b")
+        task_a = ffmpeg_task(tmp_path / "src", tmp_path / "dest-a")
+        task_b = ffmpeg_task(tmp_path / "src", tmp_path / "dest-b")
         filepath = os.path.join(task_a["source_dir"], "a.mp4")
         make_tree(task_a["source_dir"], {"a.mp4": b"video"})
         # 任务 A 已成功处理该文件

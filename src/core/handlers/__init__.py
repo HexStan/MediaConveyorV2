@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING
 
 from src.core.handlers.base import BaseTaskHandler
-from src.core.handlers.transcode import TranscodeHandler
+from src.core.handlers.ffmpeg_task import FFmpegTaskHandler
 from src.core.types import TaskOutcome
 
 if TYPE_CHECKING:
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BaseTaskHandler",
-    "TranscodeHandler",
+    "FFmpegTaskHandler",
     "create_handler",
     "process_task",
 ]
@@ -26,7 +26,7 @@ def create_handler(spec: TaskSpec, now: float | None = None) -> BaseTaskHandler 
     if spec.config is None:
         # 加载期已拒绝：错误日志已由 resolve_tasks 给出，此处静默跳过
         return None
-    return TranscodeHandler(spec, now)
+    return FFmpegTaskHandler(spec, now)
 
 
 def process_task(spec: TaskSpec, now: float | None = None) -> TaskOutcome:

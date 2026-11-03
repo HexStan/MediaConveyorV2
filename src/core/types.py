@@ -4,8 +4,8 @@ from enum import Enum
 class FileAction(Enum):
     """单个被扫描文件的处理动作判定。"""
 
-    PROCESS = "process"  # 走 FFmpeg 转码
-    PASSTHROUGH = "passthrough"  # 不转码，直接移动到目标目录
+    PROCESS = "process"  # 走 FFmpeg 处理
+    PASSTHROUGH = "passthrough"  # 不经 FFmpeg，直接移动到目标目录
     SKIP = "skip"  # 跳过，留在源目录
 
 
@@ -22,8 +22,8 @@ class TaskOutcome(Enum):
     SKIPPED = "skipped"
 
 
-class TranscodeStats:
-    """单轮转码任务的统计（print_task_summary 的数据源）。"""
+class TaskRunStats:
+    """单轮任务执行的统计（print_task_summary 的数据源）。"""
 
     def __init__(self) -> None:
         self._processed = 0

@@ -164,7 +164,7 @@ class TestReferenceValidation:
 
 
 class TestPathValidation:
-    """transcode 任务新增的目录位置关系校验（加载期收口）。"""
+    """FFmpeg 任务新增的目录位置关系校验（加载期收口）。"""
 
     def test_dest_inside_source_rejected(self, capture_log):
         specs = _plan([_task(source_dir="s", dest_dir="s/out")], capture_log)
@@ -259,7 +259,7 @@ class TestRunTasksOrchestration:
 
     def test_failed_dependency_skips_dependent(self, tmp_path, run_round, stub_ffmpeg, capture_log):
         # 前置任务命令模板错误 → 本轮 FAILED（直传任务不经过命令模板，
-        # 故前置任务须为真实转码任务才能观察 FAILED）
+        # 故前置任务须为真实 FFmpeg 任务才能观察 FAILED）
         first = {
             "source_dir": str(tmp_path / "src-a"),
             "dest_dir": str(tmp_path / "dest-a"),

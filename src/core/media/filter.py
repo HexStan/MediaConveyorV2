@@ -1,7 +1,7 @@
 """文件过滤：文件名分类流水线与媒体属性匹配。
 
 分类流水线（命中即停）：include（不匹配则跳过）→ exclude（匹配则跳过）
-→ passthrough（匹配则直传）→ 默认转码。三个 pattern 列表均以 fnmatch
+→ passthrough（匹配则直传）→ 默认走 FFmpeg 处理。三个 pattern 列表均以 fnmatch
 匹配相对 source_dir 的路径，匹配前统一小写并以 / 归一路径分隔符，
 等效大小写不敏感。
 

@@ -1,4 +1,4 @@
-"""单元测试：transcode 任务配置模型（加载期校验收口的契约）。
+"""单元测试：FFmpeg 任务配置模型（加载期校验收口的契约）。
 
 钉死的契约：
 - source_dir / dest_dir / ffmpeg_cmd 必填，extra="forbid" 拒绝未知字段；

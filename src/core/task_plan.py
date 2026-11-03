@@ -141,7 +141,7 @@ def _validate_paths(config: TaskConfig, index: int, logger: Logger) -> bool:
     """目录位置关系的跨字段校验；返回 False 表示任务应被拒绝。
 
     - dest_dir 不得等于或位于 source_dir 之内，source_dir 也不得位于
-      dest_dir 之内：转码输出写入扫描树会形成"输出再被扫描"的反馈回路；
+      dest_dir 之内：任务输出写入扫描树会形成"输出再被扫描"的反馈回路；
     - backup_dir 不得位于 source_dir/dest_dir 之内：成功善后的移动/清理
       会与备份目录互相破坏。
     """

@@ -4,7 +4,7 @@
 - start：脱离终端运行实例，随后在本终端滚动显示运行日志（窗口可随时关闭；
   --quiet 时确认实例启动后即返回，不跟随日志）；
 - log：滚动显示运行日志（自动跟随跨天轮转），底部状态栏显示实例运行状态；
-- stop：停止运行中的实例（--fast 立即中止转码 / --slow 本轮结束后停止）；
+- stop：停止运行中的实例（--fast 立即中止处理 / --slow 本轮结束后停止）；
 - run-once：让处于调度休眠期的实例立即执行一轮任务，随后滚动显示日志
   （--quiet 时确认指令受理后即返回，未受理按失败退出）。
 
@@ -34,7 +34,7 @@ def main() -> None:
     _ensure_utf8_stdio()
 
     parser = argparse.ArgumentParser(
-        description="MediaConveyor - 音视频文件自动转码工具",
+        description="MediaConveyor - 音视频文件自动化处理工具",
         epilog="子命令: start（脱离终端运行）/ log（滚动显示日志）/ stop（停止实例）"
         "/ run-once（立即执行一轮）",
     )
@@ -64,7 +64,7 @@ def main() -> None:
     stop_group.add_argument(
         "--fast",
         action="store_true",
-        help="立即中止正在运行的转码与文件操作并退出（5 秒内未退出则强制结束）",
+        help="立即中止正在运行的 FFmpeg 处理与文件操作并退出（5 秒内未退出则强制结束）",
     )
     stop_group.add_argument("--slow", action="store_true", help="等待本轮任务结束后再退出")
 
