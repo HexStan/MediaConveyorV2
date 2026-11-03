@@ -36,8 +36,8 @@ uv run ruff format .                                                    # Ruff �
 uv run pyrefly check                                                    # Pyrefly 类型检查（strict 门禁，配置见 pyproject.toml 的 [tool.pyrefly]）
 uv run python main.py                                                   # 前台运行，读取 config/config.toml，缺失即退出
 uv run python main.py start                                             # 分离式后台实例（另有 log / stop / run-once）
-uv run --group build python scripts/build_executable.py                 # 构建当前平台的可执行文件（PyInstaller onedir；运行要求 PATH 中有 ffmpeg）
-uv run python scripts/smoke_test.py "dist/MediaConveyor-*.zip"          # 对发行 zip 做冒烟检查（包结构 + 入口可运行）
+uv run --group build python scripts/build_executable.py                 # 构建当前平台的可执行文件（PyInstaller onedir；构建时联网下载内置 FFmpeg，版本见 pyproject.toml 的 [tool.mediaconveyor]）
+uv run python scripts/smoke_test.py "dist/MediaConveyor-*.zip"          # 对发行 zip 做冒烟检查（包结构 + 入口与内置 FFmpeg 可运行）
 ```
 
 - 运行前需 `cp config/config.example.toml config/config.toml`；`config.toml`、`data/`、`logs/` 已 gitignore，只提交 `config/*.example.toml`。

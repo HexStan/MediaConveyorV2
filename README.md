@@ -27,7 +27,10 @@
 ## 🛠️ 依赖要求
 
 - **[uv](https://docs.astral.sh/uv/)**：用于按锁文件安装依赖并运行程序（Python 由 uv 托管，无需单独安装）。
-- **FFmpeg**：必须安装并配置在系统的环境变量（PATH）中（Docker 镜像已内置）。
+- **FFmpeg**：
+  - **可执行文件版**：已内置，无需安装（版本由 `pyproject.toml` 统一声明；macOS Apple Silicon 上内置为 Intel 构建，经 Rosetta 2 运行）；
+  - **源码运行**：必须安装并配置在系统的环境变量（PATH）中；
+  - **Docker**：镜像已内置。
 
 ## 🚀 安装与运行
 
@@ -259,7 +262,7 @@ include_patterns = ["*.flac", "*.wav"]
 
 ## 🐳 Docker 部署说明
 
-- 镜像基于 `python:3.14-slim`，内置静态构建的 FFmpeg（n8.1）与 VAAPI/NVIDIA 驱动；
+- 镜像基于 `python:3.14-slim`，内置静态构建的 FFmpeg（版本由 `pyproject.toml` 的 `[tool.mediaconveyor].ffmpeg_version` 统一声明）与 VAAPI/NVIDIA 驱动；
 - Intel / AMD GPU 透传：`devices: ["/dev/dri:/dev/dri"]`；NVIDIA GPU 参见 `docker-compose.yml` 注释段；
 - 挂载目录：`config`（配置）、`logs`（日志）、`data`（状态库）、`source` / `dest` / `backup`（业务目录）；
 - 容器内工作目录为 `/app`，所有相对路径配置均以该目录为基准。
@@ -270,8 +273,10 @@ include_patterns = ["*.flac", "*.wav"]
 uv run --group build python scripts/build_executable.py    # 构建当前平台的 onedir 发行包
 ```
 
-产物为 `dist/MediaConveyor-<版本>-<平台>.zip`；可执行文件**不内置 FFmpeg**，运行要求系统中已安装并在 PATH 中。
+产物为 `dist/MediaConveyor-<版本>-<平台>.zip`；可执行文件**已内置 FFmpeg**（`_internal/ffmpeg/`，运行时自动前置到 PATH），无需系统安装。构建脚本会联网下载对应平台的 FFmpeg（版本见 `[tool.mediaconveyor].ffmpeg_version`），包内 `licenses/` 附带其 GPL 许可文本与源码获取说明。
 
 ## 📄 许可证
 
 [MIT](./LICENSE)
+
+可执行文件版内置的 FFmpeg 为 GPL 构建，其许可文本与源码获取说明随包附带于 `licenses/`（仓库内见 `resources/licenses/`）。
