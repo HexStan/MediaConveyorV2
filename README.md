@@ -55,6 +55,8 @@
    cp config/config.example.toml config/config.toml
    ```
 
+   按需编辑 `config/config.toml`，各项含义与取值范围见下方「配置向导」。
+
 4. **运行程序**
 
    ```bash
@@ -71,6 +73,8 @@
    ```bash
    cp config/config.example.toml config/config.toml
    ```
+
+   按需编辑 `config/config.toml`，各项含义与取值范围见下方「配置向导」。
 
 2. **使用 Docker Compose 启动**
 
@@ -107,7 +111,7 @@
 # log_dir = "./logs"                # 【选填】日志目录，默认 ./logs
 # data_dir = "./data"               # 【选填】状态数据库目录，默认 ./data
 # max_log_files = 7                 # 【选填】最多保留 N 天的日志文件，默认 0（不清理）
-# log_level = "INFO"                # 【选填】日志级别：DEBUG / INFO / WARNING / ERROR / CRITICAL
+# log_level = "INFO"                # 【选填】日志级别：DEBUG / INFO / SUCCESS / WARNING / ERROR / CRITICAL
 ```
 
 > 排查问题时可将 `log_level` 设为 `"DEBUG"`，日志会输出详细的文件跳过原因。
