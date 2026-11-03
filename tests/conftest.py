@@ -13,8 +13,8 @@ import pytest
 
 from src.app.config import GlobalConfig
 from src.app.context import AppContext
+from src.core.handlers import create_handler
 from src.core.media import ffmpeg as ffmpeg_module
-from src.core.registry import create_handler
 from src.core.state import StateManager
 from src.core.task_plan import resolve_tasks
 
@@ -134,7 +134,7 @@ def run_task(app_context):
 
     用法::
 
-        handler = run_task({"mode": "transcode", "source_dir": ..., ...}, now=NOW)
+        handler = run_task({"source_dir": ..., "dest_dir": ..., ...}, now=NOW)
 
     与生产装配路径对齐：任务字典先经加载期解析（resolve_tasks——任务
     模型校验，错误日志在此给出，被拒绝的任务返回 None），

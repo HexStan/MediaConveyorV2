@@ -41,7 +41,6 @@ def transcode_task(source, dest, **overrides):
             filter_cfg[name] = overrides.pop(name)
 
     task = {
-        "mode": "transcode",
         "source_dir": str(source),
         "dest_dir": str(dest),
         "ffmpeg_cmd": 'ffmpeg -y -i "{input}" "{output}-encoded.mp4"',

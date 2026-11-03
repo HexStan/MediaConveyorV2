@@ -6,9 +6,6 @@
 app.runtime 的任务循环判定。
 
 模型设计：
-- 按 mode 判别：``TASK_MODELS`` 维护 mode → 模型类的分派表（解析器
-  按 mode 选模型后手工分派，不用 pydantic discriminated union——
-  为的是 mode 缺失/不支持时能逐字输出钉死的中文错误消息）；
 - ``extra="forbid"``：未知字段（含拼写错误）拒绝任务——配置文件驱动
   的工具里，字段拼错静默失效最难排查；
 - ``frozen=True``：模型加载后不可变，处理器只读消费；
@@ -22,7 +19,7 @@ app.runtime 的任务循环判定。
 字段交给类型与范围约束，由 format_validation_error 统一翻译。
 """
 
-from typing import Annotated, Literal, Self
+from typing import Annotated, Self
 
 from pydantic import (
     BaseModel,
@@ -170,27 +167,21 @@ class FilterConfig(BaseModel):
 # ---- 任务模型 ---------------------------------------------------------------
 
 
-class TaskBase(BaseModel):
-    """各模式任务的公共字段（mode 由子类以 Literal 收窄并参与分派）。"""
+class TaskConfig(BaseModel):
+    """[[tasks]] 任务条目配置模型：监听源目录，用 FFmpeg 处理后按配置善后。
+
+    id 的"非法降级为无 id"、depends_on 的"单字符串 → 单元素元组"归一
+    与跨任务引用校验都在解析器（task_plan）完成——降级/归一不是校验
+    失败，模型只接收归一后的干净值。
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # id 的"非法降级为无 id"语义在解析器（task_plan）处理：降级不是
-    # 校验失败，模型只接收归一后的干净值（非法值被写回为 None）
     id: str | None = None
     name: str | None = None
-    # 前置任务 id 列表：单字符串 → 单元素元组的归一与跨任务引用校验在
-    # 解析器完成，模型只声明归一后的字段形态
     depends_on: tuple[str, ...] = ()
     source_dir: Annotated[str, StringConstraints(min_length=1)]
-    dest_dir: str = ""
-
-
-class TranscodeTaskConfig(TaskBase):
-    """transcode 模式任务配置：监听源目录，用 FFmpeg 处理后按配置善后。"""
-
-    mode: Literal["transcode"]
-    # 覆写基类默认值：转码没有目标目录即无意义，dest_dir 必填
+    # 转码没有目标目录即无意义，dest_dir 必填
     dest_dir: Annotated[str, StringConstraints(min_length=1)]
     filter: FilterConfig = Field(default_factory=FilterConfig)
 
@@ -217,12 +208,3 @@ class TranscodeTaskConfig(TaskBase):
         if self.fallback_count > 0 and not self.ffmpeg_cmd_fallback:
             raise ValueError("配置了 fallback_count 时必须同时配置 ffmpeg_cmd_fallback")
         return self
-
-
-TaskConfig = TranscodeTaskConfig
-
-# mode → 配置模型的分派表（解析器使用；与 registry 的 mode → 处理器
-# 映射由同一组模式名驱动，不一致属编程错误，registry 有防御分支兜底）
-TASK_MODELS: dict[str, type[TaskConfig]] = {
-    "transcode": TranscodeTaskConfig,
-}

@@ -1,4 +1,4 @@
-"""transcode 模式处理器：监听源目录，用 FFmpeg 处理音视频文件。
+"""转码任务处理器：监听源目录，用 FFmpeg 处理音视频文件。
 
 单轮执行的完整流水线（对齐 v1 MediaConveyor 的 scanner + processor 组合）：
 
@@ -28,9 +28,8 @@ from src.core.handlers.base import BaseTaskHandler
 from src.core.media.ffmpeg import TemplateFormatError, build_command, run_ffmpeg
 from src.core.media.filter import FileFilter
 from src.core.media.probe import MediaInfo, empty_media_info, get_media_info
-from src.core.registry import register_handler
 from src.core.state import SuccessState, file_key, task_key
-from src.core.task_config import TranscodeTaskConfig
+from src.core.task_config import TaskConfig
 from src.core.types import FileAction, TranscodeStats
 from src.fs import (
     FsOpError,
@@ -67,7 +66,6 @@ class _ScanReport:
     expired: list[tuple[str, str, str]] = field(default_factory=list)  # (rel, filepath, fkey)
 
 
-@register_handler("transcode")
 class TranscodeHandler(BaseTaskHandler):
     """FFmpeg 转码任务处理器。"""
 
@@ -79,9 +77,7 @@ class TranscodeHandler(BaseTaskHandler):
 
     def __init__(self, spec: TaskSpec, now: float | None = None) -> None:
         super().__init__(spec, now)
-        # 注册表分派保证（task_config.TASK_MODELS 与 registry 由同一组模式名驱动）
-        assert isinstance(self.task, TranscodeTaskConfig), "任务配置模型分派错误"
-        self._config: TranscodeTaskConfig = self.task
+        self._config: TaskConfig = self.task
         self._filter = FileFilter(self._config.filter)
         self._stats = TranscodeStats()
         self._key = task_key(self._config.source_dir, self._config.dest_dir)
@@ -216,7 +212,7 @@ class TranscodeHandler(BaseTaskHandler):
     def _collect_expired(
         self,
         report: _ScanReport,
-        config: TranscodeTaskConfig,
+        config: TaskConfig,
         rel_path: str,
         filepath: str,
         fkey: str,

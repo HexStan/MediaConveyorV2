@@ -1,7 +1,7 @@
 """单元测试：transcode 任务配置模型（加载期校验收口的契约）。
 
 钉死的契约：
-- source_dir / dest_dir / ffmpeg_cmd / mode 必填，extra="forbid" 拒绝未知字段；
+- source_dir / dest_dir / ffmpeg_cmd 必填，extra="forbid" 拒绝未知字段；
 - 数字字段接受数字字符串（lax 强转），布尔值一律拒绝；
 - 过滤条件的范围值在加载期解析：非法值得到明确的中文错误，而不是
   运行期被静默当作 0；
@@ -11,13 +11,12 @@
 import pytest
 from pydantic import ValidationError
 
-from src.core.task_config import FilterConfig, TranscodeTaskConfig
+from src.core.task_config import FilterConfig, TaskConfig
 from src.validation import format_validation_error
 
 
 def make_task(**overrides) -> dict:
     task = {
-        "mode": "transcode",
         "source_dir": "./source",
         "dest_dir": "./dest",
         "ffmpeg_cmd": 'ffmpeg -i "{input}" "{output}.mp4"',
@@ -28,9 +27,8 @@ def make_task(**overrides) -> dict:
 
 class TestRequiredFields:
     def test_minimal_task(self):
-        config = TranscodeTaskConfig.model_validate(make_task())
+        config = TaskConfig.model_validate(make_task())
 
-        assert config.mode == "transcode"
         assert config.source_dir == "./source"
         assert config.dest_dir == "./dest"
         assert config.failure_count == 3
@@ -42,13 +40,13 @@ class TestRequiredFields:
         assert config.backup_dir == ""
         assert config.ffmpeg_cmd_fallback == ""
 
-    @pytest.mark.parametrize("field", ["mode", "source_dir", "dest_dir", "ffmpeg_cmd"])
+    @pytest.mark.parametrize("field", ["source_dir", "dest_dir", "ffmpeg_cmd"])
     def test_missing_required_field_rejected(self, field):
         task = make_task()
         del task[field]
 
         with pytest.raises(ValidationError) as exc_info:
-            TranscodeTaskConfig.model_validate(task)
+            TaskConfig.model_validate(task)
 
         message = format_validation_error(exc_info.value)
         assert f"{field}: 缺少必填字段" in message
@@ -56,7 +54,7 @@ class TestRequiredFields:
 
 class TestFieldCoercion:
     def test_numeric_strings_coerced(self):
-        config = TranscodeTaskConfig.model_validate(
+        config = TaskConfig.model_validate(
             make_task(failure_count="5", stable_duration="10", source_expired_minutes="60")
         )
 
@@ -66,26 +64,26 @@ class TestFieldCoercion:
 
     def test_bool_rejected_for_numeric_fields(self):
         with pytest.raises(ValidationError, match="不接受布尔值"):
-            TranscodeTaskConfig.model_validate(make_task(failure_count=True))
+            TaskConfig.model_validate(make_task(failure_count=True))
 
         with pytest.raises(ValidationError, match="不接受布尔值"):
-            TranscodeTaskConfig.model_validate(make_task(stable_duration=False))
+            TaskConfig.model_validate(make_task(stable_duration=False))
 
     def test_negative_values_rejected(self):
         with pytest.raises(ValidationError):
-            TranscodeTaskConfig.model_validate(make_task(failure_count=-1))
+            TaskConfig.model_validate(make_task(failure_count=-1))
 
         with pytest.raises(ValidationError):
-            TranscodeTaskConfig.model_validate(make_task(ffmpeg_timeout=-5))
+            TaskConfig.model_validate(make_task(ffmpeg_timeout=-5))
 
     def test_unknown_fields_rejected(self):
         with pytest.raises(ValidationError) as exc_info:
-            TranscodeTaskConfig.model_validate(make_task(ffmpeg_command="x"))
+            TaskConfig.model_validate(make_task(ffmpeg_command="x"))
 
         assert "ffmpeg_command: 不支持的字段" in format_validation_error(exc_info.value)
 
     def test_multiline_cmd_preserved(self):
-        config = TranscodeTaskConfig.model_validate(
+        config = TaskConfig.model_validate(
             make_task(ffmpeg_cmd='ffmpeg -y \\\n  -i "{input}" \\\n  "{output}.mp4"')
         )
 
@@ -95,10 +93,10 @@ class TestFieldCoercion:
 class TestFallbackValidation:
     def test_fallback_without_cmd_rejected(self):
         with pytest.raises(ValidationError, match="必须同时配置 ffmpeg_cmd_fallback"):
-            TranscodeTaskConfig.model_validate(make_task(fallback_count=3))
+            TaskConfig.model_validate(make_task(fallback_count=3))
 
     def test_fallback_with_cmd_accepted(self):
-        config = TranscodeTaskConfig.model_validate(
+        config = TaskConfig.model_validate(
             make_task(fallback_count=3, ffmpeg_cmd_fallback='ffmpeg "{input}" "{output}.mp4"')
         )
 
@@ -186,7 +184,7 @@ class TestFilterConfig:
         assert config.file_mtime == 300.0
 
     def test_filter_embedded_in_task(self):
-        config = TranscodeTaskConfig.model_validate(
+        config = TaskConfig.model_validate(
             make_task(filter={"include_patterns": ["*.mp4"], "file_mtime": 300})
         )
 

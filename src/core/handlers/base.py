@@ -1,9 +1,9 @@
 """任务处理器基类：模板方法执行骨架。
 
-子类只实现 ``_execute()``：任务头展示等共有前导步骤收敛于此，
-新增模式自动获得同一入口行为。外部条件校验（目录存在等运行期才可
-判定的条件）由各处理器在 ``_execute()`` 内自行检查；配置可判定的
-校验已在加载期收口（task_config / task_plan）。
+子类只实现 ``_execute()``：任务头展示等共有前导步骤收敛于此。
+外部条件校验（目录存在等运行期才可判定的条件）由各处理器在
+``_execute()`` 内自行检查；配置可判定的校验已在加载期收口
+（task_config / task_plan）。
 """
 
 import time
@@ -32,7 +32,6 @@ class BaseTaskHandler(ABC):
         self.now = now or time.time()
         self.source_root: str = config.source_dir
         self.dest_root: str = config.dest_dir
-        self.task_mode: str = config.mode
 
     def execute(self) -> TaskOutcome:
         """模板方法：任务头展示 → 子类执行。
@@ -48,7 +47,6 @@ class BaseTaskHandler(ABC):
             task_id=self.task.id,
             name=self.task.name,
             depends_on=self.depends_on,
-            mode=self.task.mode,
             source=self.task.source_dir,
             dest=self.task.dest_dir,
         )

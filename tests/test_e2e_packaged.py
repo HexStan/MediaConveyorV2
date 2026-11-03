@@ -6,16 +6,20 @@ CI 中由 executable-build.yml 在构建后设置该变量执行。
 
 本模块覆盖灰盒够不到的两段链路：
 1. TOML 配置形状 → 任务字典：灰盒直接传入 Python 字典，绕过了 ConfigManager；
-   这里走真实的 config.toml 加载路径，钉死规则块在 TOML 中的形状；
+   这里走真实的 config.toml 加载路径，钉死任务与过滤条件块在 TOML 中的形状；
 2. 打包布局与入口启动：冻结形态下应用根目录 = 可执行文件所在目录
    （src/app/paths.py），配置必须写在程序目录的 config/ 下。
 
 驱动子进程属于进程边界，符合 tests/README.md 原则三。
 
+场景设计：全部任务配置 passthrough_patterns 直传（不经 FFmpeg，任意
+字节皆可）——FFmpeg 执行路径已由灰盒测试在进程边界打桩覆盖，此处钉
+的是 TOML 形状与冻结布局，不引入对真实 ffmpeg 的依赖。
+
 时钟说明（对原则四的偏离及理由）：打包二进制无法注入 now，只能使用真实
 时钟。测试仅依赖「真实当前时刻远超 make_tree 固定的过去时间戳 OLD」这一
-单调不变量（NOW = 2023-11-14，早于任何现实运行时刻）；轮转顺序等行为
-判定全部来自显式设定的 mtime，不依赖具体时刻，也不 sleep。
+单调不变量（NOW = 2023-11-14，早于任何现实运行时刻）；行为判定不依赖
+具体时刻，也不 sleep。
 """
 
 import os
@@ -25,7 +29,7 @@ import subprocess
 import pytest
 
 from src.platform_info import exe_name
-from tests.helpers import OLD, make_tree, snapshot
+from tests.helpers import make_tree, snapshot
 
 PROGRAM_DIR = os.environ.get("MEDIACONVEYOR_BIN")
 
@@ -75,6 +79,17 @@ def _assert_ok(result):
     )
 
 
+def _transcode_task_toml(src, dest, *, filter_body=""):
+    """单任务节：直传过滤占位（f-string 中 ffmpeg_cmd 的花括号需双写）。"""
+    filter_block = f"\n[tasks.filter]\n{filter_body}" if filter_body else ""
+    return (
+        f'source_dir = "{src}"\n'
+        f'dest_dir = "{dest}"\n'
+        'ffmpeg_cmd = \'ffmpeg -y -i "{{input}}" "{{output}}.mp4"\'\n'
+        f"{filter_block}"
+    )
+
+
 @pytest.fixture
 def program_dir(tmp_path):
     """复制打包程序目录到临时位置：不污染构建产物，且允许写入测试配置。"""
@@ -83,25 +98,21 @@ def program_dir(tmp_path):
     return str(target)
 
 
-class TestMoveViaBinary:
-    def test_move_transfers_old_files(self, program_dir, tmp_path):
+class TestTranscodeViaBinary:
+    def test_passthrough_transfers_files(self, program_dir, tmp_path):
+        """[[tasks]] + 嵌套 [tasks.filter] 的 TOML 形状（灰盒直接传字典，
+        覆盖不到）：passthrough 命中的文件不经 FFmpeg 直传进目标目录，
+        保持子目录结构。"""
         src = (tmp_path / "src").as_posix()
         dest = (tmp_path / "dest").as_posix()
         os.makedirs(dest)  # 目标目录已存在是生产前置条件
         make_tree(tmp_path / "src", {"a.txt": b"alpha", "sub/b.log": b"beta"})
         _write_config(
             program_dir,
-            f"""\
-log_dir = "./logs"
-
-[[tasks]]
-mode = "move"
-source = "{src}"
-dest = "{dest}"
-mtime_threshold_seconds = 3600
-remove_empty_dirs = true
-max_retries = 1
-""",
+            'log_dir = "./logs"\n\n[[tasks]]\n'
+            + _transcode_task_toml(
+                src, dest, filter_body='passthrough_patterns = ["*.txt", "*.log"]\n'
+            ),
         )
 
         result = _run_binary(program_dir)
@@ -109,12 +120,12 @@ max_retries = 1
         _assert_ok(result)
         assert snapshot(tmp_path / "src") == {}
         assert snapshot(tmp_path / "dest") == {"a.txt": 5, "sub/b.log": 4}
-        # remove_empty_dirs = true：搬空后的子目录被清理
+        # 搬空后的子目录被清理
         assert not os.path.exists(tmp_path / "src" / "sub")
 
-    def test_rule_pipeline_applies_toml_rules(self, program_dir, tmp_path):
-        """include 目录命中 → exclude 拦截 → delete 删除的完整流水线，
-        顺带钉死规则块在 TOML 中的形状（灰盒直接传字典，覆盖不到）。"""
+    def test_filter_pipeline_applies_toml_rules(self, program_dir, tmp_path):
+        """include 门禁 → exclude 拦截 → passthrough 直传的完整流水线：
+        include 未命中的文件留在源目录，exclude 命中的被跳过。"""
         src = (tmp_path / "src").as_posix()
         dest = (tmp_path / "dest").as_posix()
         os.makedirs(dest)
@@ -129,64 +140,52 @@ max_retries = 1
         )
         _write_config(
             program_dir,
-            f"""\
-log_dir = "./logs"
-
-[[tasks]]
-mode = "move"
-source = "{src}"
-dest = "{dest}"
-mtime_threshold_seconds = 3600
-remove_empty_dirs = false
-max_retries = 1
-
-[tasks.include_rules]
-ge."media/" = 0
-
-[tasks.exclude_rules]
-ge."secret.mp4" = 0
-
-[tasks.delete_rules]
-lt."*.tmp" = "10MB"
-""",
+            'log_dir = "./logs"\n\n[[tasks]]\n'
+            + _transcode_task_toml(
+                src,
+                dest,
+                filter_body=(
+                    'include_patterns = ["media/*"]\n'
+                    'exclude_patterns = ["*.tmp", "media/secret.mp4"]\n'
+                    'passthrough_patterns = ["*"]\n'
+                ),
+            ),
         )
 
         result = _run_binary(program_dir)
 
         _assert_ok(result)
-        assert snapshot(tmp_path / "src") == {"media/secret.mp4": 1, "outside.txt": 1}
+        assert snapshot(tmp_path / "src") == {
+            "media/secret.mp4": 1,
+            "media/junk.tmp": 1,
+            "outside.txt": 1,
+        }
         assert snapshot(tmp_path / "dest") == {"media/v1.mp4": 1}
 
-
-class TestRotateViaBinary:
-    def test_count_limit_rotates_oldest(self, program_dir, tmp_path):
-        src = (tmp_path / "src").as_posix()
-        dest = (tmp_path / "dest").as_posix()
-        os.makedirs(dest)
-        make_tree(tmp_path / "src", {f"f{i}.txt": (b"x", OLD + i) for i in range(5)})
+    def test_multi_task_dependency_gating(self, program_dir, tmp_path):
+        """两个 [[tasks]] 节 + id/depends_on 的 TOML 形状：前置任务本轮
+        完成后，依赖它的任务才执行。"""
+        src_a = (tmp_path / "src-a").as_posix()
+        dest_a = (tmp_path / "dest-a").as_posix()
+        src_b = (tmp_path / "src-b").as_posix()
+        dest_b = (tmp_path / "dest-b").as_posix()
+        for d in (dest_a, dest_b):
+            os.makedirs(d)
+        make_tree(tmp_path / "src-a", {"a.txt": b"alpha"})
+        make_tree(tmp_path / "src-b", {"b.txt": b"beta"})
         _write_config(
             program_dir,
-            f"""\
-log_dir = "./logs"
-
-[[tasks]]
-mode = "rotate"
-source = "{src}"
-dest = "{dest}"
-conflict_policy = "skip"
-remove_empty_dirs = false
-count_limit = 3
-max_retries = 1
-""",
+            'log_dir = "./logs"\n\n'
+            '[[tasks]]\nid = "first"\n'
+            + _transcode_task_toml(src_a, dest_a, filter_body='passthrough_patterns = ["*"]\n')
+            + '\n[[tasks]]\ndepends_on = ["first"]\n'
+            + _transcode_task_toml(src_b, dest_b, filter_body='passthrough_patterns = ["*"]\n'),
         )
 
         result = _run_binary(program_dir)
 
         _assert_ok(result)
-        # 超过 count_limit=3：最旧的 f0、f1 被轮转出目录
-        assert snapshot(tmp_path / "src") == {
-            "f2.txt": 1,
-            "f3.txt": 1,
-            "f4.txt": 1,
-        }
-        assert snapshot(tmp_path / "dest") == {"f0.txt": 1, "f1.txt": 1}
+        assert snapshot(tmp_path / "src-a") == {}
+        assert snapshot(tmp_path / "dest-a") == {"a.txt": 5}
+        assert snapshot(tmp_path / "src-b") == {}
+        assert snapshot(tmp_path / "dest-b") == {"b.txt": 4}

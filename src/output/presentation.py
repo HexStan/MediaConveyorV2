@@ -51,7 +51,6 @@ def print_task_header(
     task_id: str | None,
     name: str | None,
     depends_on: Sequence[str] | None,
-    mode: str,
     source: str,
     dest: str,
 ) -> None:
@@ -65,11 +64,6 @@ def print_task_header(
     if depends_on:
         logger.info(f" - 依赖: {'、'.join(depends_on)}")
 
-    mode_labels = {
-        "transcode": "转码",
-    }
-    mode_str = mode_labels.get(mode, mode)
-    logger.info(f" - 任务模式: {mode_str}")
     logger.info(f" - 源目录: {source}")
     logger.info(f" - 目标目录: {dest}")
 

@@ -47,7 +47,6 @@ def wait_until(condition, timeout=EXECUTE_TIMEOUT):
 def transcode_task(tmp_path):
     """直传观察任务：dest 预创建（生产前置条件）。"""
     task = {
-        "mode": "transcode",
         "source_dir": str(tmp_path / "src"),
         "dest_dir": str(tmp_path / "dest"),
         "ffmpeg_cmd": 'ffmpeg -i "{input}" "{output}.mp4"',
@@ -80,7 +79,7 @@ def start_schedule(app_context, tmp_path, task, schedule_config):
     config_path.write_text(
         "\n".join(schedule_lines)
         + "\n\n[[tasks]]\n"
-        + f'mode = "transcode"\nsource_dir = "{source}"\ndest_dir = "{dest}"\n'
+        + f'source_dir = "{source}"\ndest_dir = "{dest}"\n'
         + '\n[tasks.filter]\npassthrough_patterns = ["*"]\n',
         encoding="utf-8",
     )

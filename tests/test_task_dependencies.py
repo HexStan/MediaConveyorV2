@@ -29,7 +29,6 @@ from tests.helpers import make_tree, snapshot
 def _task(**extra):
     """最小合法任务字典（解析期不做 I/O，source_dir/dest_dir 路径无需存在）。"""
     task = {
-        "mode": "transcode",
         "source_dir": "s",
         "dest_dir": "d",
         "ffmpeg_cmd": 'ffmpeg -i "{input}" "{output}.mp4"',
@@ -216,7 +215,6 @@ class TestPathValidation:
 
 def _passthrough_task(src, dest, **extra):
     task = {
-        "mode": "transcode",
         "source_dir": str(src),
         "dest_dir": str(dest),
         "ffmpeg_cmd": 'ffmpeg -i "{input}" "{output}.mp4"',
@@ -263,7 +261,6 @@ class TestRunTasksOrchestration:
         # 前置任务命令模板错误 → 本轮 FAILED（直传任务不经过命令模板，
         # 故前置任务须为真实转码任务才能观察 FAILED）
         first = {
-            "mode": "transcode",
             "source_dir": str(tmp_path / "src-a"),
             "dest_dir": str(tmp_path / "dest-a"),
             "ffmpeg_cmd": "ffmpeg {oops}",
@@ -283,9 +280,9 @@ class TestRunTasksOrchestration:
         assert snapshot(second["dest_dir"]) == {}
 
     def test_skipped_dependency_cascades(self, tmp_path, run_round, capture_log):
-        # 前置任务缺 mode → 装配失败 SKIPPED；依赖链逐级跳过
+        # 前置任务缺必填字段 → 装配失败 SKIPPED；依赖链逐级跳过
         first = _passthrough_task(tmp_path / "src-a", tmp_path / "dest-a", id="a")
-        del first["mode"]
+        del first["source_dir"]
         second = _passthrough_task(
             tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"]
         )
@@ -348,7 +345,6 @@ class TestRunTasksOrchestration:
         self, tmp_path, run_round, stub_ffmpeg, capture_log
     ):
         first = {
-            "mode": "transcode",
             "source_dir": str(tmp_path / "src-a"),
             "dest_dir": str(tmp_path / "dest-a"),
             "ffmpeg_cmd": "ffmpeg {oops}",

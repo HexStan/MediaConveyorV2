@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from pydantic import ValidationError
 
-from src.core.task_config import TASK_MODELS, TaskConfig, TranscodeTaskConfig
+from src.core.task_config import TaskConfig
 from src.validation import ALIAS_PATTERN, format_validation_error
 
 if TYPE_CHECKING:
@@ -120,28 +120,6 @@ def _has_unresolvable_reference(
     return False
 
 
-def _dispatch_mode(entry: dict[str, Any], index: int, logger: Logger) -> type[TaskConfig] | None:
-    """按 mode 分派配置模型；mode 缺失/不支持时记错误并返回 None。
-
-    mode 大小写不敏感，归一化后写回 entry 供模型校验；
-    缺失与不支持各记一条 error。
-    """
-    raw_mode = entry.get("mode")
-    if raw_mode is None:
-        logger.error(f"任务 #{index + 1} 缺少 mode 字段，跳过该任务。")
-        return None
-    if not isinstance(raw_mode, str):
-        logger.error(f"任务 #{index + 1} 不支持的任务模式: {raw_mode!r}，跳过该任务。")
-        return None
-    mode = raw_mode.lower()
-    model_cls = TASK_MODELS.get(mode)
-    if model_cls is None:
-        logger.error(f"任务 #{index + 1} 不支持的任务模式: {mode}，跳过该任务。")
-        return None
-    entry["mode"] = mode
-    return model_cls
-
-
 def _norm_path(path: str) -> str:
     return os.path.normcase(os.path.abspath(path))
 
@@ -159,7 +137,7 @@ def _is_within(child: str, ancestor: str) -> bool:
         return False
 
 
-def _validate_paths(config: TranscodeTaskConfig, index: int, logger: Logger) -> bool:
+def _validate_paths(config: TaskConfig, index: int, logger: Logger) -> bool:
     """目录位置关系的跨字段校验；返回 False 表示任务应被拒绝。
 
     - dest_dir 不得等于或位于 source_dir 之内，source_dir 也不得位于
@@ -196,8 +174,8 @@ def resolve_tasks(
 
     第一遍逐任务做 id 规范化与注册（仅合法 id，先到先得——注册反映
     "配置中声明的 id"，与任务自身合法性解耦：被拒绝任务声明的 id 仍可
-    被引用，运行期依赖门禁自然级联）、mode 分派、depends_on 类型归一、
-    配置模型校验与跨字段约束校验；第二遍在全部合法 id 注册完毕后做
+    被引用，运行期依赖门禁自然级联）、depends_on 类型归一、配置模型
+    校验与跨字段约束校验；第二遍在全部合法 id 注册完毕后做
     引用校验（存在性 / 自引用 / 前向引用）。两遍产出与 raw_tasks
     一一对应的 draft，最终按序返回。
     """
@@ -209,7 +187,7 @@ def resolve_tasks(
             drafts.append(TaskSpec(None))
             continue
 
-        # 浅拷贝：归一化需要写回（mode / id / depends_on），不污染调用方的原始字典
+        # 浅拷贝：归一化需要写回（id / depends_on），不污染调用方的原始字典
         entry = dict(raw)
 
         task_id = _normalize_id(entry, index, logger)
@@ -223,31 +201,23 @@ def resolve_tasks(
         if task_id is not None:
             registered[task_id] = index
 
-        model_cls = _dispatch_mode(entry, index, logger)
-        if model_cls is None:
-            drafts.append(TaskSpec(None))
-            continue
-
         depends_on = _normalize_depends_on(entry, index, logger)
         if depends_on is None:
             drafts.append(TaskSpec(None))
             continue
 
         try:
-            config = model_cls.model_validate(entry)
+            config = TaskConfig.model_validate(entry)
         except ValidationError as e:
             logger.error(f"任务 #{index + 1} 配置无效，跳过该任务：{format_validation_error(e)}")
             drafts.append(TaskSpec(None))
             continue
 
-        if isinstance(config, TranscodeTaskConfig):
-            if not _validate_paths(config, index, logger):
-                drafts.append(TaskSpec(None))
-                continue
-            if config.remove_source and config.backup_dir:
-                logger.warning(
-                    f"任务 #{index + 1} 配置了 remove_source = true，backup_dir 将被忽略。"
-                )
+        if not _validate_paths(config, index, logger):
+            drafts.append(TaskSpec(None))
+            continue
+        if config.remove_source and config.backup_dir:
+            logger.warning(f"任务 #{index + 1} 配置了 remove_source = true，backup_dir 将被忽略。")
 
         drafts.append(TaskSpec(config, task_id, depends_on))
 
