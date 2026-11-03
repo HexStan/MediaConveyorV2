@@ -76,7 +76,6 @@ DETACHED_ENV = "SMARTARCHIVER_DETACHED"
 
 # instance_name 未配置或非法时使用的默认实例标识
 DEFAULT_INSTANCE_NAME = "smartarchiver"
-DEFAULT_SERVER_INSTANCE_NAME = "smartarchiver-server"
 
 
 def _lock_available() -> bool:
@@ -121,10 +120,9 @@ def resolve_instance_name(value: object, default_name: str) -> tuple[str, bool]:
     return default_name, False
 
 
-def resolve_identity(raw_config: dict[str, Any], is_server: bool = False) -> tuple[str, bool]:
+def resolve_identity(raw_config: dict[str, Any]) -> tuple[str, bool]:
     """从原始配置解析实例标识，返回 (标识, 是否非法回退默认)。"""
-    default = DEFAULT_SERVER_INSTANCE_NAME if is_server else DEFAULT_INSTANCE_NAME
-    return resolve_instance_name(raw_config.get("instance_name"), default)
+    return resolve_instance_name(raw_config.get("instance_name"), DEFAULT_INSTANCE_NAME)
 
 
 class InstancePaths:

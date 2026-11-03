@@ -23,5 +23,4 @@ def test_source_mode_base_dir_is_repo_root():
 
 @pytest.mark.skipif(paths.is_frozen(), reason="同上")
 def test_config_path_anchored_at_repo_root():
-    assert Path(paths.config_path(False)) == PROJECT_ROOT / "config" / "config.toml"
-    assert Path(paths.config_path(True)) == PROJECT_ROOT / "config" / "config.server.toml"
+    assert Path(paths.config_path()) == PROJECT_ROOT / "config" / "config.toml"

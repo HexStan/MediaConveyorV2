@@ -21,8 +21,7 @@ from src.app.instance import (
     CMD_RUN_ONCE,
     CMD_STOP,
     DEFAULT_INSTANCE_NAME,
-    DEFAULT_SERVER_INSTANCE_NAME,
-    PHASE_RUNNING,
+        PHASE_RUNNING,
     PHASE_SLEEPING,
     STOP_FAST,
     STOP_GRACEFUL,
@@ -47,7 +46,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def _unique_name():
     """系统临时目录全局共享，用随机名避免与其他进程/测试互扰。"""
-    return f"smartarchiver-test-{uuid.uuid4().hex}"
+    return f"mediaconveyor-test-{uuid.uuid4().hex}"
 
 
 def _paths(name):
@@ -72,15 +71,8 @@ def unique_name():
 # ============================================================
 
 
-def test_resolve_identity_defaults_for_client():
+def test_resolve_identity_defaults():
     assert resolve_identity({}) == (DEFAULT_INSTANCE_NAME, False)
-
-
-def test_resolve_identity_defaults_for_server():
-    assert resolve_identity({}, is_server=True) == (
-        DEFAULT_SERVER_INSTANCE_NAME,
-        False,
-    )
 
 
 def test_resolve_identity_uses_configured_name():

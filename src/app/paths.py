@@ -3,17 +3,13 @@
 统一处理两种运行形态下的路径差异：
 - 源码运行（python main.py）：应用根目录 = 仓库根目录；
 - PyInstaller 打包运行（onedir）：应用根目录 = 可执行文件所在目录，
-  用户可编辑的 config/、logs/ 等均位于该目录下。
-
-打包时内置的第三方工具（rclone）由 PyInstaller 放入 _internal/rclone/，
-bundled_rclone_path() 负责在运行时定位它们。
+  用户可编辑的 config/、logs/、data/ 等均位于该目录下。
 """
 
 import os
 import sys
 
 import src
-from src.platform_info import exe_name, is_windows
 
 
 def is_frozen() -> bool:
@@ -34,42 +30,23 @@ def app_base_dir() -> str:
     return os.path.dirname(src_dir)
 
 
-def config_path(is_server: bool) -> str:
-    """配置文件路径：客户端为 config/config.toml，服务器为 config/config.server.toml。"""
-    name = "config/config.server.toml" if is_server else "config/config.toml"
-    return os.path.join(app_base_dir(), name)
+def config_path() -> str:
+    """配置文件路径：config/config.toml。"""
+    return os.path.join(app_base_dir(), "config", "config.toml")
 
 
-def resolve_log_dir(log_dir: str) -> str:
-    """解析日志目录：相对路径以应用根目录为基准，与启动时的工作目录无关。"""
-    if log_dir and not os.path.isabs(log_dir):
-        return os.path.normpath(os.path.join(app_base_dir(), log_dir))
-    return log_dir
-
-
-def bundled_rclone_path() -> str | None:
-    """打包版内置 rclone 的绝对路径；未打包或内置缺失时返回 None。"""
-    if not is_frozen():
-        return None
-
-    base = getattr(sys, "_MEIPASS", None)
-    if not base:
-        return None
-
-    path = os.path.join(base, "rclone", exe_name("rclone"))
-    if not os.path.isfile(path):
-        return None
-
-    _ensure_executable(path)
+def _resolve_under_base_dir(path: str) -> str:
+    """相对路径以应用根目录为基准，与启动时的工作目录无关。"""
+    if path and not os.path.isabs(path):
+        return os.path.normpath(os.path.join(app_base_dir(), path))
     return path
 
 
-def _ensure_executable(path: str) -> None:
-    """兜底确保二进制具有可执行权限（防打包/解压过程丢失执行位）。"""
-    if is_windows():
-        return
-    if not os.access(path, os.X_OK):
-        try:
-            os.chmod(path, 0o755)
-        except OSError:
-            pass
+def resolve_log_dir(log_dir: str) -> str:
+    """解析日志目录。"""
+    return _resolve_under_base_dir(log_dir)
+
+
+def resolve_data_dir(data_dir: str) -> str:
+    """解析数据目录（SQLite 状态库所在）。"""
+    return _resolve_under_base_dir(data_dir)

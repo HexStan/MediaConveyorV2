@@ -51,7 +51,7 @@ with SingleInstance(sys.argv[1], QuietLogger()):
 
 def _unique_instance_name():
     """系统临时目录是全局共享的，用随机名避免与其他进程/测试互扰。"""
-    return f"smartarchiver-test-{uuid.uuid4().hex}"
+    return f"mediaconveyor-test-{uuid.uuid4().hex}"
 
 
 def _lock_path(instance_name):

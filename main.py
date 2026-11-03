@@ -1,11 +1,10 @@
 """入口：前台运行与 start / log / stop / run-once 控制子命令。
 
-- 无子命令：前台运行（客户端模式读 config/config.toml，--server 读
-  config.server.toml）；
+- 无子命令：前台运行（读 config/config.toml）；
 - start：脱离终端运行实例，随后在本终端滚动显示运行日志（窗口可随时关闭；
   --quiet 时确认实例启动后即返回，不跟随日志）；
 - log：滚动显示运行日志（自动跟随跨天轮转），底部状态栏显示实例运行状态；
-- stop：停止运行中的实例（--fast 立即中止传输 / --slow 本轮结束后停止）；
+- stop：停止运行中的实例（--fast 立即中止转码 / --slow 本轮结束后停止）；
 - run-once：让处于调度休眠期的实例立即执行一轮任务，随后滚动显示日志
   （--quiet 时确认指令受理后即返回，未受理按失败退出）。
 
@@ -35,14 +34,9 @@ def main() -> None:
     _ensure_utf8_stdio()
 
     parser = argparse.ArgumentParser(
-        description="SmartArchiver - 智能文件归档工具",
+        description="MediaConveyor - 音视频文件自动转码工具",
         epilog="子命令: start（脱离终端运行）/ log（滚动显示日志）/ stop（停止实例）"
         "/ run-once（立即执行一轮）",
-    )
-    parser.add_argument(
-        "--server",
-        action="store_true",
-        help="以服务器模式启动，读取 config.server.toml，仅提供远程 API 服务",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="子命令")
 
@@ -70,7 +64,7 @@ def main() -> None:
     stop_group.add_argument(
         "--fast",
         action="store_true",
-        help="立即中止文件传输并退出（5 秒内未退出则强制结束）",
+        help="立即中止正在运行的转码与文件操作并退出（5 秒内未退出则强制结束）",
     )
     stop_group.add_argument("--slow", action="store_true", help="等待本轮任务结束后再退出")
 
@@ -86,20 +80,17 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command is None:
-        if args.server:
-            runtime.run_server()
-        else:
-            runtime.run_client()
+        runtime.run_client()
     elif args.command == "start":
-        control.cmd_start(args.server, args.quiet)
+        control.cmd_start(args.quiet)
     elif args.command == "log":
         if args.lines < 0:
             parser.error("--lines 不能为负数")
-        control.cmd_log(args.server, args.lines)
+        control.cmd_log(args.lines)
     elif args.command == "stop":
-        control.cmd_stop(args.server, args.fast, args.slow)
+        control.cmd_stop(args.fast, args.slow)
     elif args.command == "run-once":
-        control.cmd_run_once(args.server, args.quiet)
+        control.cmd_run_once(args.quiet)
 
 
 if __name__ == "__main__":

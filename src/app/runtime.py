@@ -1,8 +1,7 @@
 """运行路径：初始化装配、任务执行与调度循环。
 
-前台运行与 start 拉起的分离式实例最终都进入 run_client()（无
-[schedule] 时一次性运行，否则按 cron/interval 常驻）或
-run_server()（HTTP 远端 API）。
+前台运行与 start 拉起的分离式实例最终都进入 run_client()：
+无 [schedule] 时一次性运行，否则按 cron/interval 常驻。
 """
 
 import datetime
@@ -22,7 +21,6 @@ from src.app.context import AppContext
 from src.app.instance import SingleInstance
 from src.app.lifecycle import install_abort_check, install_sigterm_fast_stop
 from src.core import process_task
-from src.core.history import HistoryManager
 from src.core.types import TaskOutcome
 from src.output.logger import Logger, setup_logger
 from src.output.presentation import fmt_timespan
@@ -38,7 +36,7 @@ def _reload_config_if_changed(manager: ConfigManager) -> None:
     if cfg.used_backup:
         ctx.logger.warning("新配置加载失败，已回退到备份配置。")
 
-    ctx.update_config(cfg.config, cfg.tasks, cfg.remote_clients, cfg.ssh_remotes)
+    ctx.update_config(cfg.config, cfg.tasks)
 
 
 def run_tasks() -> None:
@@ -104,22 +102,17 @@ def _execute_tasks(manager: ConfigManager) -> None:
     _enter_phase(AppContext.get(), instance.PHASE_RUNNING)
     try:
         _reload_config_if_changed(manager)
-        ctx = AppContext.get()
         run_tasks()
-        ctx.history_mgr.save()
     except fs.TransferAbortedError:
-        # stop --fast：任务被丢弃，不做完成/失败定性，仅落盘 history；
+        # stop --fast：任务被丢弃，不做完成/失败定性；
         # 停止确认与退出日志由指令分发点与 run_client 的 finally 负责
-        AppContext.get().history_mgr.save()
+        pass
     except Exception as e:  # noqa: BLE001
         ctx = AppContext.get()
         ctx.logger.error(f"发生未知错误: {e}")
-        ctx.history_mgr.save()
 
 
-def _load_and_init(
-    config_path: str, is_server: bool = False, console: bool | None = None
-) -> ConfigManager:
+def _load_and_init(config_path: str, console: bool | None = None) -> ConfigManager:
     """加载配置文件并执行初始化流程。
 
     Args:
@@ -134,7 +127,7 @@ def _load_and_init(
 
     raw_config = ConfigManager.load_toml(config_path)
 
-    instance_name, invalid = instance.resolve_identity(raw_config, is_server)
+    instance_name, invalid = instance.resolve_identity(raw_config)
     if console is None:
         console = os.environ.get(instance.DETACHED_ENV) != "1"
 
@@ -155,7 +148,6 @@ def _load_and_init(
         # 桥接 fs 包与实例控制模块的 logger（组合根注入，output 层不感知业务模块）
         bridge_loggers=("src.fs", instance.__name__),
     )
-    history_mgr = HistoryManager(log_dir)
 
     manager = ConfigManager(config_path, logger)
     try:
@@ -165,15 +157,7 @@ def _load_and_init(
         logger.critical(f"配置文件无效：{e}")
         sys.exit(1)
 
-    AppContext.init(
-        logger,
-        history_mgr,
-        cfg.config,
-        cfg.tasks,
-        cfg.remote_clients,
-        cfg.ssh_remotes,
-        instance_name=instance_name,
-    )
+    AppContext.init(logger, cfg.config, cfg.tasks, instance_name=instance_name)
 
     if invalid:
         logger.warning("instance_name 配置值非法，已使用默认实例标识。")
@@ -242,7 +226,7 @@ def _run_cron(manager: ConfigManager, schedule: ScheduleConfig) -> None:
     ctx = AppContext.get()
     cron_expr = schedule.cron_expr
     if not cron_expr:
-        # 模型校验已拦截缺失/空串；此守卫仅作类型收窄的防御（同 sync 的 SSH 别名防御）
+        # 模型校验已拦截缺失/空串；此守卫仅作类型收窄的防御
         print("cron 模式需要配置 cron_expr。")
         sys.exit(1)
 
@@ -343,7 +327,7 @@ def _make_command_dispatcher(
 
 
 def run_client() -> None:
-    config_path = paths.config_path(is_server=False)
+    config_path = paths.config_path()
     manager = _load_and_init(config_path)
 
     ctx = AppContext.get()
@@ -366,63 +350,4 @@ def run_client() -> None:
         # stop --fast：一次性运行被中止即退出，无需额外处理
         pass
     finally:
-        ctx.history_mgr.save()
-        ctx.logger.info("Smart Archiver 已退出。")
-
-
-def _make_server_stop_watcher(
-    ctx: AppContext,
-) -> Callable[[str, Callable[[str], None]], None]:
-    """构造供 remote.server 注入的停止指令装配器。
-
-    控制文件监视线程与 SIGTERM 两个指令来源都收敛在 app 层装配；
-    接收确认日志也在此统一输出，remote 层不感知停止文案。服务器
-    没有调度循环，仅受理 stop 指令（run-once 静默忽略）。
-    """
-
-    def start(name: str, on_command: Callable[[str], None]) -> None:
-        def _apply_stop(mode: str) -> None:
-            _log_stop_received(ctx.logger, mode)
-            on_command(mode)
-
-        def _dispatch(cmd: str, payload: dict[str, Any]) -> None:
-            if cmd == instance.CMD_STOP:
-                _apply_stop(payload["mode"])
-
-        instance.ControlWatcher(name, _dispatch).start()
-        install_sigterm_fast_stop(lambda: _apply_stop(instance.STOP_FAST), ctx.logger)
-
-    return start
-
-
-def run_server() -> None:
-    config_path = paths.config_path(is_server=True)
-    _load_and_init(config_path, is_server=True)
-
-    ctx = AppContext.get()
-    install_abort_check(ctx.lifecycle)
-
-    from src.remote.server import run_server as start_server
-
-    try:
-        with SingleInstance(ctx.instance_name, ctx.logger):
-            ctx.logger.info("以服务器模式启动，请从客户端连接。")
-            # 服务器配置数值已在加载期经 GlobalConfig 收口，此处仅注入
-            start_server(
-                api_key=ctx.config.api_key,
-                port=ctx.config.port,
-                max_concurrent_metadata=ctx.config.max_concurrent_metadata,
-                max_concurrent_uploads=ctx.config.max_concurrent_uploads,
-                max_queue_metadata=ctx.config.max_queue_metadata,
-                max_queue_uploads=ctx.config.max_queue_uploads,
-                logger=ctx.logger,
-                coordinator=ctx.lifecycle,
-                instance_name=ctx.instance_name,
-                # app 域能力注入:remote 层不感知实例控制与信号装配的实现
-                stop_watcher=_make_server_stop_watcher(ctx),
-                runtime_paths=instance.instance_paths,
-            )
-    finally:
-        # 正常的 stop 走 _on_command 的 os._exit 并自带退出日志，
-        # 此 finally 只覆盖异常退出路径
-        ctx.logger.info("Smart Archiver 已退出。")
+        ctx.logger.info("MediaConveyor 已退出。")

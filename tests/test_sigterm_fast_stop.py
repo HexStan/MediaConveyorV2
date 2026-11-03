@@ -19,9 +19,7 @@ from pathlib import Path
 import pytest
 
 from src.app import instance, runtime
-from src.app.lifecycle import LifecycleCoordinator, install_sigterm_fast_stop
-from src.remote import server as remote_server
-from src.remote.concurrency import ConcurrencyGate
+from src.app.lifecycle import install_sigterm_fast_stop
 
 # 跨线程/跨进程同步的统一时限：只用于等待确定性事件，不构成时序依赖
 _WAIT_TIMEOUT = 5.0
@@ -136,56 +134,6 @@ def test_sigterm_action_triggers_client_abort(app_context, restore_sigterm):
     while not app_context.lifecycle.is_aborted() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert app_context.lifecycle.is_aborted()
-
-
-def test_server_stop_watcher_wires_sigterm_to_fast_mode(app_context, restore_sigterm):
-    """server 装配器：SIGTERM 映射为 fast 模式的停止回调。"""
-    received: list[str] = []
-    done = threading.Event()
-
-    def _on_command(mode: str) -> None:
-        received.append(mode)
-        done.set()
-
-    # 真实 ControlWatcher 守护线程：只轮询不存在的 ctl 文件，无副作用
-    runtime._make_server_stop_watcher(app_context)("sigterm-server-unittest", _on_command)
-
-    handler = signal.getsignal(signal.SIGTERM)
-    handler(signal.SIGTERM, None)
-
-    assert done.wait(timeout=_WAIT_TIMEOUT)
-    assert received == [instance.STOP_FAST]
-
-
-def test_server_stop_command_aborts_and_exits(capture_log, monkeypatch):
-    """server 的 fast 指令（控制文件与 SIGTERM 共用）：中止 → 排空 → 退出。
-
-    ``os._exit`` 是真实的进程退出，只能在进程边界打桩（改为记录调用
-    后返回），由此验证停止动作走完整个收尾流程。
-    """
-    coordinator = LifecycleCoordinator()
-    gate = ConcurrencyGate(
-        max_concurrent_metadata=1,
-        max_concurrent_uploads=1,
-        max_queue_metadata=1,
-        max_queue_uploads=1,
-    )
-    exited = threading.Event()
-    monkeypatch.setattr(os, "_exit", lambda _code: exited.set())
-
-    remote_server._start_stop_watcher(
-        capture_log,
-        coordinator,
-        gate,
-        "sigterm-server-unittest",
-        lambda _name, on_command: on_command(instance.STOP_FAST),
-        instance.instance_paths,
-    )
-
-    assert exited.wait(timeout=_WAIT_TIMEOUT)
-    assert coordinator.is_aborted()
-    # 退出日志位于 PID/控制文件清理之后，可证明收尾流程完整走完
-    assert capture_log.has("info", "已退出")
 
 
 @pytest.mark.skipif(os.name != "posix", reason="仅 POSIX 可向子进程投递真实 SIGTERM")
