@@ -67,8 +67,7 @@ source_dir = "./source"
 dest_dir = "./dest"
 
 # 【必填】FFmpeg 命令模板：{input} → 源文件完整路径；{output} → 输出文件完整路径
-#（文件名由 output_filename 决定）。占位符由程序按平台自动加引号，无需手写。
-# 书写规则详见 README 第三步
+#（文件名由 output_filename 决定）。占位符书写规则详见 README 第三步
 ffmpeg_cmd = """
 ffmpeg -y \
   -i {input} \

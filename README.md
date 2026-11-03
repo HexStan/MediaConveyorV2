@@ -178,6 +178,7 @@ output_filename = "{basename}-encoded.mp4"   # 【必填】输出文件名模板
 
 三个 pattern 均使用 [fnmatch](https://docs.python.org/zh-cn/3/library/fnmatch.html) 语法匹配相对于 `source_dir` 的文件路径（不区分大小写，路径分隔符统一为 `/`），按以下顺序流水线过滤：
 
+0. 文件名以 `.mc-ffmpeg-part.` 开头或以 `.mc-part` 结尾？此类文件名为本工具保留名，无条件跳过，不受下列 pattern 影响。
 1. 匹配 `include_patterns`？匹配则进入下一步，不匹配则跳过（不填或为空则默认包含所有文件）。
 2. 匹配 `exclude_patterns`？匹配则跳过，不匹配则进入下一步。
 3. 匹配 `passthrough_patterns`？匹配则不经过 FFmpeg 直接移动到目标目录，不匹配则进入后续的属性过滤与 FFmpeg 处理。
