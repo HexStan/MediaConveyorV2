@@ -1,6 +1,7 @@
 """文件过滤：文件名分类流水线与媒体属性匹配。
 
-分类流水线（命中即停）：include（不匹配则跳过）→ exclude（匹配则跳过）
+分类流水线（命中即停）：保留名（本工具瞬态文件，无条件跳过）→
+include（不匹配则跳过）→ exclude（匹配则跳过）
 → passthrough（匹配则直传）→ 默认走 FFmpeg 处理。三个 pattern 列表均以 fnmatch
 匹配相对 source_dir 的路径，匹配前统一小写并以 / 归一路径分隔符，
 等效大小写不敏感。
@@ -13,10 +14,18 @@ size 与 file_mtime 不触发 ffprobe，纯文件名/大小/时间过滤的扫�
 import fnmatch
 from collections.abc import Sequence
 
+from src.core.media.ffmpeg import FFMPEG_PART_PREFIX
 from src.core.media.probe import MediaInfo
 from src.core.task_config import FilterConfig
 from src.core.types import FileAction
+from src.fs.atomic import PARTIAL_SUFFIX
 from src.output.logger import Logger
+
+# 本工具瞬态文件的保留名：FFmpeg 输出 part（media.ffmpeg，前缀标记）与
+# 原子写 part（fs.atomic，后缀标记）。分类对之作保留名处理——链式任务
+# 监听上游 dest_dir 时不会把写入中的中间产物当作待处理文件，passthrough
+# 全匹配（``*``）也不会把它们直传走；用户 patterns（含 include）无法
+# 覆盖该规则。
 
 
 class FileFilter:
@@ -35,10 +44,15 @@ class FileFilter:
         """根据相对路径判断文件分类。
 
         输入路径会先做小写与分隔符归一（与 patterns 加载期的归一一致）。
+        保留名判定最先执行：本工具自身的瞬态文件无条件跳过，先于
+        用户 patterns（含 include 全匹配与 passthrough）。
         """
         rel_path = rel_path.replace("\\", "/").lower()
         config = self._config
 
+        basename = rel_path.rsplit("/", 1)[-1]
+        if basename.startswith(FFMPEG_PART_PREFIX) or basename.endswith(PARTIAL_SUFFIX):
+            return FileAction.SKIP
         if config.include_patterns and not self._match_patterns(rel_path, config.include_patterns):
             return FileAction.SKIP
         if self._match_patterns(rel_path, config.exclude_patterns):

@@ -93,6 +93,25 @@ def render_output_filename(template: str, basename: str) -> str:
         ) from e
 
 
+# FFmpeg 输出瞬态文件名前缀：处理期间 {output} 实际指向
+# ``.mc-ffmpeg-part.{output}``。标记不置于尾部（``.{output}.mc-ffmpeg-part``
+# 形式）的原因：ffmpeg 依据输出文件的扩展名推断封装格式，未知后缀会
+# 触发 "Unable to choose an output format"。与 fs/atomic.py 的 .mc-part
+# 同构：目标同目录的确定性命名，处理完成后由处理器原子改名复原。
+FFMPEG_PART_PREFIX = ".mc-ffmpeg-part."
+
+
+def part_output_filename(out_filename: str) -> str:
+    """渲染输出文件的瞬态 part 文件名（``.mc-ffmpeg-part.{output}``）。
+
+    output_filename 在加载期已校验为纯文件名，part 文件与最终输出
+    同目录同文件系统，完成后的改名（os.replace）是原子操作：观察
+    目标目录的消费者在处理完成前不会看到最终文件名。完整原名保留在
+    标记之后，扩展名仍位于末尾，ffmpeg 的封装格式推断不受影响。
+    """
+    return f"{FFMPEG_PART_PREFIX}{out_filename}"
+
+
 def _consume_stderr(process: subprocess.Popen[str], lines: queue.Queue[str]) -> None:
     """逐块读取子进程 stderr，按行拆分后投入队列（在独立线程中运行）。"""
     buffer = ""

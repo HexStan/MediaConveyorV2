@@ -7,8 +7,10 @@
    修改时间冷却 → 媒体属性过滤（仅在配置了需要 ffprobe 的条件时探测）；
 2. 过期清理：延迟删除到期的源文件（删除成功才清记录，失败下轮重试）；
 3. 逐文件处理：稳定性检查（stable_duration 的 size 复查，睡眠分片可被
-   fast 停止打断）→ FFmpeg 执行或 passthrough 直传 → 源文件善后
-   （立即删除 / 延迟删除 / 备份 / 保留）→ 成功记录 → 清理空目录。
+   fast 停止打断）→ FFmpeg 写入瞬态 part 文件（.{output}.mc-ffmpeg-part，
+   成功后原子改名复原，失败与 fast 停止均清理）或 passthrough 直传 →
+   源文件善后（立即删除 / 延迟删除 / 备份 / 保留）→ 成功记录 →
+   清理空目录。
 
 单文件失败不中断本轮任务（状态库计数兜底，达到 failure_count 后永久
 跳过）；命令模板错误属配置级错误，中止本轮并给出明确报错。
@@ -28,6 +30,7 @@ from src.core.handlers.base import BaseTaskHandler
 from src.core.media.ffmpeg import (
     TemplateFormatError,
     build_command,
+    part_output_filename,
     render_output_filename,
     run_ffmpeg,
 )
@@ -69,6 +72,12 @@ class _ScanReport:
 
     entries: list[_ScanEntry] = field(default_factory=list)
     expired: list[tuple[str, str, str]] = field(default_factory=list)  # (rel, filepath, fkey)
+
+
+def _discard_part_file(part_path: str) -> None:
+    """尽力删除 FFmpeg 输出的 part 文件（本轮失败残骸或上次崩溃残留）。"""
+    with contextlib.suppress(OSError):
+        os.remove(part_path)
 
 
 class FFmpegTaskHandler(BaseTaskHandler):
@@ -341,6 +350,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
         final_dest_dir = os.path.join(config.dest_dir, rel_dir)
         out_filename = render_output_filename(config.output_filename, name)
         dst_output_path = os.path.join(final_dest_dir, out_filename)
+        part_output_path = os.path.join(final_dest_dir, part_output_filename(out_filename))
 
         use_fallback = (
             config.fallback_count > 0
@@ -353,22 +363,30 @@ class FFmpegTaskHandler(BaseTaskHandler):
         else:
             ctx.logger.info(f"开始处理 {entry.rel_path}{duration_note}。")
 
-        cmd = build_command(template, entry.filepath, dst_output_path)
+        cmd = build_command(template, entry.filepath, part_output_path)
         ctx.logger.debug(f"执行 FFmpeg 命令: {cmd}")
 
         ensure_dir(final_dest_dir)
-        # 记录处理前目标目录的文件列表，用于失败时清理不完整的输出文件
-        existing_files = set(os.listdir(final_dest_dir))
+        # 先清理上次崩溃残留的同名 part 文件（对齐 fs/atomic 的先清后建），
+        # 此后 part 文件必为本轮产物，失败清理无需比对既有文件
+        _discard_part_file(part_output_path)
 
-        ok = run_ffmpeg(
-            cmd,
-            rel_path=entry.rel_path,
-            logger=ctx.logger,
-            coordinator=ctx.lifecycle,
-            timeout=config.ffmpeg_timeout,
-        )
+        try:
+            ok = run_ffmpeg(
+                cmd,
+                rel_path=entry.rel_path,
+                logger=ctx.logger,
+                coordinator=ctx.lifecycle,
+                timeout=config.ffmpeg_timeout,
+            )
+        except TransferAbortedError:
+            # fast 停止：写入中的 part 文件必不完整，尽力清理后向上传播
+            _discard_part_file(part_output_path)
+            raise
+
         if ok:
-            self._handle_success(ctx, entry, rel_dir, filename)
+            if self._restore_output_name(ctx, entry, part_output_path, dst_output_path, fkey):
+                self._handle_success(ctx, entry, rel_dir, filename)
             return
 
         # 失败计数：主命令失败专计（供 fallback 切换），fallback 阶段的失败
@@ -379,8 +397,35 @@ class FFmpegTaskHandler(BaseTaskHandler):
             state.increment_ffmpeg_failure(self._key, fkey)
         else:
             state.increment_failure(self._key, fkey)
-        self._cleanup_partial_output(final_dest_dir, existing_files, out_filename)
+        _discard_part_file(part_output_path)
         self._stats.record_failed()
+
+    def _restore_output_name(
+        self,
+        ctx: AppContext,
+        entry: _ScanEntry,
+        part_path: str,
+        dst_path: str,
+        fkey: str,
+    ) -> bool:
+        """处理成功后把 part 文件原子改名为最终输出文件名。
+
+        part 与最终输出同目录，move_file（os.replace）为同文件系统原子
+        操作：观察目标目录的消费者只会看到完整的最终文件，已存在的旧
+        最终文件被整体顶替。改名失败（如最终文件被其他程序占用）按
+        普通文件失败处理——不烧 fallback 专用计数（换备用命令无济于
+        事），part 文件随之清理，下轮重试整轮编码。
+        """
+        try:
+            move_file(part_path, dst_path)
+        except FsOpError as e:
+            ctx.logger.error(f"输出文件就位失败: {entry.rel_path}\n{e}")
+            ctx.require_state().increment_failure(self._key, fkey)
+            _discard_part_file(part_path)
+            self._stats.record_failed()
+            return False
+        ctx.logger.debug(f"输出文件已就位: {dst_path}")
+        return True
 
     def _duration_note(self, entry: _ScanEntry) -> str:
         """日志中的媒体时长注记；未探测到时长时省略（不做二次 ffprobe）。"""
@@ -433,22 +478,6 @@ class FFmpegTaskHandler(BaseTaskHandler):
 
         self._stats.record_processed(entry.size)
         clean_empty_dirs(config.source_dir)
-
-    def _cleanup_partial_output(
-        self, final_dest_dir: str, existing_files: set[str], out_filename: str
-    ) -> None:
-        """删除 FFmpeg 失败后残留的不完整输出。
-
-        输出文件名由 output_filename 显式声明，清理精确匹配：只删本轮
-        新增且文件名恰为声明的输出文件的残留；处理前已存在的同名文件与
-        模板旁路写出的其他文件均不动。
-        """
-        if not os.path.isdir(final_dest_dir) or out_filename in existing_files:
-            return
-        path = os.path.join(final_dest_dir, out_filename)
-        if os.path.isfile(path):
-            with contextlib.suppress(OSError):
-                os.remove(path)
 
     # ---- 提示去重 ---------------------------------------------------------
 

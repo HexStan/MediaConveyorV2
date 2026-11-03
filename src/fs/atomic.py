@@ -11,9 +11,10 @@ from src.fs.scan import ensure_dir
 
 logger = logging.getLogger(__name__)
 
-# 临时文件后缀。采用确定性命名（目标同目录 + 固定后缀），
+# 临时文件后缀（公开常量：文件过滤器据此把本工具的瞬态文件排除在
+# 待处理名单之外）。采用确定性命名（目标同目录 + 固定后缀），
 # 是「再次写入同名文件时清理上次崩溃残留」的前提。
-_PARTIAL_SUFFIX = ".mc-part"
+PARTIAL_SUFFIX = ".mc-part"
 
 
 def _partial_temp_path(dest_path: str) -> str:
@@ -23,7 +24,7 @@ def _partial_temp_path(dest_path: str) -> str:
     """
     dest_dir = os.path.dirname(dest_path) or "."
     filename = os.path.basename(dest_path)
-    return os.path.join(dest_dir, f".{filename}{_PARTIAL_SUFFIX}")
+    return os.path.join(dest_dir, f".{filename}{PARTIAL_SUFFIX}")
 
 
 def _discard_partial(temp_path: str) -> None:
@@ -59,7 +60,7 @@ def _create_temp_file(dest_path: str) -> str:
     fd, fallback_path = tempfile.mkstemp(
         dir=dest_dir,
         prefix=f".{os.path.basename(dest_path)}.",
-        suffix=_PARTIAL_SUFFIX,
+        suffix=PARTIAL_SUFFIX,
     )
     os.close(fd)
     return fallback_path
