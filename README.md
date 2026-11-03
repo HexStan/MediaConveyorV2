@@ -4,7 +4,7 @@
 
 📝 [更新日志](./CHANGELOG.md)
 
-> 本项目（V2）基于 [SmartArchiver](https://github.com/HexStan/SmartArchiver) 的常驻任务骨架重构而来，继承了其调度、实例控制与工程化设施；领域功能自 MediaConveyor 1.x 移植。配置格式与 1.x 不兼容，迁移说明见 [CHANGELOG](./CHANGELOG.md)。
+> 本项目基于 [SmartArchiver](https://github.com/HexStan/SmartArchiver) 的常驻任务骨架重构而来，继承了其调度、实例控制与工程化设施；领域功能自 MediaConveyorV1 移植。配置格式与 V1 不兼容，迁移说明见 [CHANGELOG](./CHANGELOG.md)。
 
 ## 💡 启发与背景
 
@@ -111,11 +111,10 @@
 
 ### 第三步：创建任务
 
-每个 `[[tasks]]` 节定义一个监听与处理任务。`mode`、源目录、目标目录与 FFmpeg 命令为必填：
+每个 `[[tasks]]` 节定义一个监听与处理任务。源目录、目标目录与 FFmpeg 命令为必填：
 
 ```toml
 [[tasks]]
-mode = "transcode"                          # 【必填】任务模式（当前仅 transcode）
 # id = "anime"                              # 【选填】任务标识，供其他任务 depends_on 引用
 # name = "我的任务"                          # 【选填】任务名称，用于日志标识
 source_dir = "./source"                     # 【必填】源目录（递归扫描）
@@ -234,7 +233,6 @@ fallback_count = 3   # 主命令连续失败 3 次后启用备用命令（此后
 ```toml
 # 第一组任务
 [[tasks]]
-mode = "transcode"
 name = "视频转码"
 source_dir = "./videos"
 dest_dir = "./output"
@@ -244,7 +242,6 @@ include_patterns = ["*.mp4", "*.mkv"]
 
 # 第二组任务
 [[tasks]]
-mode = "transcode"
 name = "音频处理"
 source_dir = "./music"
 dest_dir = "./audio"

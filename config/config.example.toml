@@ -50,9 +50,6 @@ interval_seconds = 60
 # 每个 [[tasks]] 节定义一个监听与转码任务，紧邻的 [tasks.filter] 是它的过滤条件。
 
 [[tasks]]
-# 【必填】任务模式：transcode（FFmpeg 转码）
-mode = "transcode"
-
 # 【选填】任务标识：供其他任务的 depends_on 引用（a-z、A-Z、0-9、-、_）
 # id = "anime"
 
@@ -157,7 +154,6 @@ passthrough_patterns = ["*.srt", "*.jpg"]
 
 # 第二个任务示例：音频转码
 [[tasks]]
-mode = "transcode"
 name = "音频转码"
 source_dir = "./music"
 dest_dir = "./audio"
