@@ -6,7 +6,7 @@
 
 ### 破坏性变更
 
-- 项目基于 SmartArchiver 的基础设施全面重构，配置文件格式与 V1 完全不兼容：任务定义迁移至 `[[tasks]]` + `mode = "transcode"`，过滤条件迁移至 `[tasks.filter]`（原 `[tasks.filter]` 字段名保持一致，新增范围型媒体属性条件的加载期校验）。
+- 项目基于 SmartArchiver 的基础设施全面重构，配置文件格式与 V1 完全不兼容：任务定义迁移至 `[[tasks]]`，过滤条件迁移至 `[tasks.filter]`（原 `[tasks.filter]` 字段名保持一致，新增范围型媒体属性条件的加载期校验）。
 - 全局节变更：`scan_interval` 由 `[schedule]` 调度节取代（省略该节 = 一次性运行；`interval_seconds` 等价原 `scan_interval`；新增 cron 模式）。
 - 状态库文件位置变更：`data/` 目录下为 `state.db`（沿用 SQLite，表结构新增任务隔离键与源文件 size/mtime 快照；旧库不迁移，首次启动视为全新状态）。
 - 新增 `data_dir` 配置项（默认 `./data`）；`log_dir` / `data_dir` 相对路径改以程序所在目录为基准解析，不再跟随工作目录。

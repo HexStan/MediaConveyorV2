@@ -30,7 +30,7 @@ MediaConveyor 是监听目录并调用 FFmpeg 处理音视频文件的自动化�
 ```bash
 uv sync --all-groups                                                    # 安装依赖到 .venv（严格按 uv.lock 锁定；dev 组 = 运行依赖 + ruff / pyrefly / pytest / 类型存根）
 uv run python -m pytest                                                 # 全部测试（pyproject.toml 已设 pythonpath=. 和 testpaths=tests）
-uv run python -m pytest tests/test_greybox_transcode.py -v              # 单个测试文件
+uv run python -m pytest tests/test_greybox_ffmpeg_task.py -v              # 单个测试文件
 uv run ruff check .                                                     # Ruff 静态检查
 uv run ruff format .                                                    # Ruff 格式化
 uv run pyrefly check                                                    # Pyrefly 类型检查（strict 门禁，配置见 pyproject.toml 的 [tool.pyrefly]）
@@ -51,7 +51,7 @@ uv run python scripts/smoke_test.py "dist/MediaConveyor-*.zip"          # 对发
 ## 架构速览
 
 - 运行入口：`main.py` 仅 CLI 解析与分发；运行路径在 `src/app/runtime.py`，控制子命令 start/log/stop/run-once 在 `src/app/control.py`。
-- 加载期：`src/app/config.py` 的 `ConfigManager`（Pydantic）完成所有仅凭配置即可判定的校验，单任务条目错误记日志跳过、不致命；`src/core/task_config.py` 定义任务配置模型（transcode）与 `[tasks.filter]` 过滤模型，`src/core/task_plan.py` 的 `resolve_tasks()` 完成逐任务校验（含目录嵌套关系）与 id/depends_on 静态校验。
+- 加载期：`src/app/config.py` 的 `ConfigManager`（Pydantic）完成所有仅凭配置即可判定的校验，单任务条目错误记日志跳过、不致命；`src/core/task_config.py` 定义任务配置模型（FFmpeg 处理任务）与 `[tasks.filter]` 过滤模型，`src/core/task_plan.py` 的 `resolve_tasks()` 完成逐任务校验（含目录嵌套关系）与 id/depends_on 静态校验。
 - 运行期：处理器在 `src/core/handlers/`，基类 `BaseTaskHandler` 只做模板方法编排，`handlers/__init__.py` 提供 `create_handler` / `process_task` 装配入口；"前置任务是否完成"由 `app/runtime.py` 的任务循环判定。
 - 领域层：`src/core/media/` 是 FFmpeg 领域包——`parsing.py`（配置值解析，IEC 80000-13 单位语义）、`probe.py`（ffprobe 封装，异常降级全零默认值）、`filter.py`（文件名分类流水线 + 媒体属性匹配）、`ffmpeg.py`（命令模板填充与子进程托管执行）。
 - 状态库：`src/core/state.py` 的 `StateManager`（SQLite）是防重复处理、失败计数与 fallback 切换的唯一依据；记录以 (task_key, filepath) 隔离，成功快照含源文件 size/mtime（内容变化后重处理）。

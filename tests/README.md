@@ -4,17 +4,17 @@
 
 ## 为什么是“灰盒为主、白盒补盲”
 
-MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + SQLite 状态”的变换工具，它**会转码、移动和删除用户的文件**。因此：
+MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + SQLite 状态”的变换工具，它**会处理、移动和删除用户的文件**。因此：
 
-1. **正确性有一个天然的外部判定标准**——最终哪些文件被转码、直传、删除、备份、保留在原地，以及状态库里的记录。断言真实文件系统与状态库的最终状态，比断言内部某个分支被走过信号强得多。
-2. **大部分代码是 I/O 编排**（文件系统、ffprobe/ffmpeg subprocess）。对它们做白盒测试意味着大量 mock，测的其实是 mock 本身；FFmpeg 的转码语义、编解码器行为都在白盒边界之外。
+1. **正确性有一个天然的外部判定标准**——最终哪些文件被处理、直传、删除、备份、保留在原地，以及状态库里的记录。断言真实文件系统与状态库的最终状态，比断言内部某个分支被走过信号强得多。
+2. **大部分代码是 I/O 编排**（文件系统、ffprobe/ffmpeg subprocess）。对它们做白盒测试意味着大量 mock，测的其实是 mock 本身；FFmpeg 的处理语义、编解码器行为都在白盒边界之外。
 3. **少数行为从外部根本观察不到**（命令模板填充、输出流解析、进度节流），只能靠白盒单元测试兜住。
 
 ## 分层结构
 
 | 层 | 文件 | 被测对象 | 驱动方式 |
 |----|------|---------|---------|
-| 灰盒·模式处理器 | `test_greybox_transcode.py` | TranscodeHandler（扫描/过滤/稳定性/转码/善后/延迟删除/多任务隔离） | `run_task()` 入口 + 临时目录树 + `stub_ffmpeg` 进程边界打桩 |
+| 灰盒·模式处理器 | `test_greybox_ffmpeg_task.py` | FFmpegTaskHandler（扫描/过滤/稳定性/处理/善后/延迟删除/多任务隔离） | `run_task()` 入口 + 临时目录树 + `stub_ffmpeg` 进程边界打桩 |
 | 白盒·媒体属性探测 | `test_media_probe.py` | ffprobe 封装（JSON 解析、容错降级、首个流选取） | `subprocess.run` 进程边界打桩 |
 | 白盒·配置值解析 | `test_media_parsing.py` | 容量/时长/码率解析器（IEC 80000-13 单位语义、显式报错） | 纯函数直接调用 |
 | 白盒·文件过滤 | `test_media_filter.py` | classify 流水线、file_mtime 冷却、媒体属性匹配 | 直接调用 |
@@ -49,7 +49,7 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
 不在此列的内部细节（比如某个私有方法的返回结构）不要测——那会把测试焊死在实现上。
 
 **原则三：打桩只发生在外部边界。**
-桩只能放在**进程或网络边界**（`subprocess.Popen`、`subprocess.run`），因为这些是“不在我们控制之内的外部世界”。业务函数之间不许互相打桩——那会掩盖真实的集成缺陷。conftest 的 `stub_ffmpeg` fixture 是范式：拦截 `Popen` 记录构造出的命令行，断言我们传给 FFmpeg 的参数正确，而不假装自己测试了转码。
+桩只能放在**进程或网络边界**（`subprocess.Popen`、`subprocess.run`），因为这些是“不在我们控制之内的外部世界”。业务函数之间不许互相打桩——那会掩盖真实的集成缺陷。conftest 的 `stub_ffmpeg` fixture 是范式：拦截 `Popen` 记录构造出的命令行，断言我们传给 FFmpeg 的参数正确，而不假装自己测试了 FFmpeg 处理。
 
 **原则四：确定性——禁止依赖真实时钟。**
 - 所有 `now` 通过 `run_task(task, now=NOW)` 显式注入；
@@ -106,12 +106,12 @@ MEDIACONVEYOR_BIN=dist/MediaConveyor python -m pytest tests/test_e2e_packaged.py
 
 ```bash
 python -m pytest            # 全部测试
-python -m pytest tests/test_greybox_transcode.py -v
+python -m pytest tests/test_greybox_ffmpeg_task.py -v
 ```
 
 ## 新增测试的决策路径
 
-1. 行为能从 `execute()` 入口观察？→ 写进 `test_greybox_transcode.py`。
+1. 行为能从 `execute()` 入口观察？→ 写进 `test_greybox_ffmpeg_task.py`。
 2. 不能观察，但属于对外契约（性能、顺序、单位语义）？→ 写进对应白盒文件，并在模块 docstring 里注明“为什么这里必须白盒”。
 3. 涉及外部进程？→ 只在边界打桩，参考 conftest 的 `stub_ffmpeg`。
 4. 三条都不满足 → 先怀疑这个测试有没有必要存在。
