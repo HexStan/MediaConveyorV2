@@ -6,6 +6,7 @@
 
 import datetime
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -331,11 +332,37 @@ def _make_command_dispatcher(
     return _dispatch
 
 
+def _log_ffmpeg_source(logger: Logger) -> None:
+    """启动时记录 FFmpeg 的解析结果与版本（内置优先），支撑问题诊断。
+
+    冻结形态下内置目录已在入口前置到 PATH（src/app/paths.py）；此处读取
+    版本横幅仅作诊断输出，任何失败不阻塞运行（后续调用失败另有报错）。
+    """
+    ffmpeg_dir = paths.bundled_ffmpeg_dir()
+    source = f"内置（{ffmpeg_dir}）" if ffmpeg_dir is not None else "系统 PATH"
+    version = ""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-version"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout:
+            version = result.stdout.splitlines()[0].strip()
+    except OSError, ValueError, subprocess.SubprocessError:
+        pass
+    logger.info(f"FFmpeg 来源: {source}{'：' + version if version else ''}。")
+
+
 def run_client() -> None:
     config_path = paths.config_path()
     manager = _load_and_init(config_path)
 
     ctx = AppContext.get()
+    _log_ffmpeg_source(ctx.logger)
     install_abort_check(ctx.lifecycle)
     stop_action = _make_stop_action(ctx)
     dispatch = _make_command_dispatcher(ctx, stop_action)

@@ -11,12 +11,12 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list; \
     fi
 
-# 安装 GPU 加速驱动与静态构建的 FFmpeg（Debian 源的 ffmpeg 版本较旧，且不带
-# 完整的 VAAPI/NVENC 支持）：
+# 安装 GPU 加速驱动（Debian 源不带完整的 VAAPI/NVENC 支持）：
 # - intel-media-va-driver-non-free: Intel QSV/VAAPI（仅 amd64）
 # - mesa-va-drivers: AMD VAAPI
 # - nvidia-vaapi-driver: NVIDIA VAAPI（仅 amd64）
-# - FFmpeg 取 BtbN 的 n8.1 静态构建（amd64/arm64 双架构分支）
+# - wget / xz-utils: 下一层下载静态 FFmpeg 所需
+# 本层不读 pyproject.toml，其缓存不随任何配置变更失效
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     vainfo \
@@ -28,18 +28,32 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     intel-media-va-driver-non-free \
     nvidia-vaapi-driver; \
-    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"; \
-    FFMPEG_DIR="ffmpeg-n8.1-latest-linux64-gpl-8.1"; \
+    fi && \
+    rm -rf /var/lib/apt/lists/*
+
+# 先复制版本清单（[tool.mediaconveyor] 声明内置 FFmpeg 版本，供下方读取；
+# 此层在 apt 层之后，pyproject.toml 变更不影响上面的驱动层缓存）
+COPY pyproject.toml ./
+
+# 安装静态构建的 FFmpeg（版本唯一出处：pyproject.toml 的
+# [tool.mediaconveyor].ffmpeg_version，可执行文件构建
+# scripts/build_executable.py 读取同一处；Debian 源的 ffmpeg 版本较旧，
+# 且不带完整的 VAAPI/NVENC 支持，故取 BtbN 的同名分支构建，amd64/arm64
+# 双架构分支）。仅 ffmpeg_version 变更时才重建本层
+RUN FFMPEG_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["tool"]["mediaconveyor"]["ffmpeg_version"])') && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then \
+    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n${FFMPEG_VERSION}-latest-linux64-gpl-${FFMPEG_VERSION}.tar.xz"; \
+    FFMPEG_DIR="ffmpeg-n${FFMPEG_VERSION}-latest-linux64-gpl-${FFMPEG_VERSION}"; \
     elif [ "$ARCH" = "arm64" ]; then \
-    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz"; \
-    FFMPEG_DIR="ffmpeg-n8.1-latest-linuxarm64-gpl-8.1"; \
+    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n${FFMPEG_VERSION}-latest-linuxarm64-gpl-${FFMPEG_VERSION}.tar.xz"; \
+    FFMPEG_DIR="ffmpeg-n${FFMPEG_VERSION}-latest-linuxarm64-gpl-${FFMPEG_VERSION}"; \
     fi && \
     wget -qO /tmp/ffmpeg.tar.xz "$FFMPEG_URL" && \
     tar -xf /tmp/ffmpeg.tar.xz -C /tmp && \
     chmod +x /tmp/$FFMPEG_DIR/bin/* && \
     cp -a /tmp/$FFMPEG_DIR/bin/* /usr/local/bin/ && \
-    rm -rf /tmp/ffmpeg.tar.xz /tmp/$FFMPEG_DIR && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /tmp/ffmpeg.tar.xz /tmp/$FFMPEG_DIR
 
 # 设置工作目录
 WORKDIR /app

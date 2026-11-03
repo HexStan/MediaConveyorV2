@@ -14,7 +14,7 @@
 import argparse
 import sys
 
-from src.app import control, runtime
+from src.app import control, paths, runtime
 
 
 def _ensure_utf8_stdio() -> None:
@@ -32,6 +32,9 @@ def _ensure_utf8_stdio() -> None:
 
 def main() -> None:
     _ensure_utf8_stdio()
+    # 内置 FFmpeg 前置到 PATH（仅冻结形态生效）：命令模板与 ffprobe 的裸
+    # 命令名据此解析到 _internal/ffmpeg/ 下的内置版本，须先于一切子进程
+    paths.ensure_bundled_ffmpeg_on_path()
 
     parser = argparse.ArgumentParser(
         description="MediaConveyor - 音视频文件自动化处理工具",

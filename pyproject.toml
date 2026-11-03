@@ -71,6 +71,16 @@ build = [
     "pyinstaller==6.22.3",
 ]
 
+[tool.mediaconveyor]
+# 内置 FFmpeg 的版本（唯一出处），语义为 FFmpeg 发布分支（major.minor）：
+# - Windows 可执行文件构建（scripts/build_executable.py）与 Docker 镜像
+#   （docker/app/Dockerfile）：取 BtbN/FFmpeg-Builds 的同名分支构建
+#   （ffmpeg-n{版本}-latest-{win64|winarm64|linux64|linuxarm64}-gpl-{版本}）；
+# - macOS 可执行文件构建：取 evermeet.cx 上该分支内最新的 release 构建
+#   （构建脚本经 Info API 自动探测）。
+# 升级时仅需修改本值并重新构建；三个消费方读取同一出处。
+ffmpeg_version = "9.0"
+
 [tool.pytest.ini_options]
 # 测试体系详见 tests/README.md
 pythonpath = ["."]
