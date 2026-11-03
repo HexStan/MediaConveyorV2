@@ -1,4 +1,4 @@
-# SmartArchiver 项目配置：项目元数据、依赖与工具配置的唯一出处。
+# MediaConveyor 项目配置：项目元数据、依赖与工具配置的唯一出处。
 #
 # 本项目是「源码直接运行」的 CLI 应用：Docker 跑源码、PyInstaller 打源码、
 # 用户 clone 运行，不发布到 PyPI，因此无 [build-system]、不做 pip 安装。

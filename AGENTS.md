@@ -1,6 +1,6 @@
 # AGENTS.md
 
-SmartArchiver 是文件归档/清理工具：目录树 + 配置 → 新目录树。仓库文档、用户可见的日志与错误信息一律使用中文；提交信息用 Conventional Commits + 中文描述（如 `fix: 修复规则匹配对于目录的逻辑缺陷`）。
+MediaConveyor 是监听目录并调用 FFmpeg 处理音视频文件的自动化工具：源目录树 + 配置 → 目标目录树 + SQLite 状态库。仓库文档、用户可见的日志与错误信息一律使用中文；提交信息用 Conventional Commits + 中文描述（如 `fix: 修复过滤条件对空 patterns 的判定缺陷`）。
 
 ## 代码规范性要求
 
@@ -8,7 +8,7 @@ SmartArchiver 是文件归档/清理工具：目录树 + 配置 → 新目录树
 
   - 大胆增/删/改写模块，以保持低耦合、高内聚，避免出现补丁式代码。
   - 允许引入新库，不要为了“不增加依赖”而频繁自己造轮子。
-  
+
 - 如果：
 
   - 不确定某个功能应该使用何种方案来实现
@@ -28,17 +28,18 @@ SmartArchiver 是文件归档/清理工具：目录树 + 配置 → 新目录树
 ```bash
 uv sync --all-groups                                                    # 安装依赖到 .venv（严格按 uv.lock 锁定；dev 组 = 运行依赖 + ruff / pyrefly / pytest / 类型存根）
 uv run python -m pytest                                                 # 全部测试（pyproject.toml 已设 pythonpath=. 和 testpaths=tests）
-uv run python -m pytest tests/test_greybox_rotate.py -v                 # 单个测试文件
+uv run python -m pytest tests/test_greybox_transcode.py -v              # 单个测试文件
 uv run ruff check .                                                     # Ruff 静态检查
 uv run ruff format .                                                    # Ruff 格式化
 uv run pyrefly check                                                    # Pyrefly 类型检查（strict 门禁，配置见 pyproject.toml 的 [tool.pyrefly]）
-uv run python main.py                                                   # 客户端模式，读取 config/config.toml，缺失即退出
-uv run python main.py --server                                          # 服务器模式，读取 config/config.server.toml
-uv run --group build python scripts/build_executable.py                 # 构建当前平台的可执行文件（PyInstaller onedir + 内置 rclone；--group build 保证隐式同步不裁掉 PyInstaller）
-uv run python scripts/smoke_test.py "dist/SmartArchiver-*.zip" # 对发行 zip 做冒烟检查（包结构 + 入口可运行）
+uv run python main.py                                                   # 前台运行，读取 config/config.toml，缺失即退出
+uv run python main.py start                                             # 分离式后台实例（另有 log / stop / run-once）
+uv run --group build python scripts/build_executable.py                 # 构建当前平台的可执行文件（PyInstaller onedir；运行要求 PATH 中有 ffmpeg）
+uv run python scripts/smoke_test.py "dist/MediaConveyor-*.zip"          # 对发行 zip 做冒烟检查（包结构 + 入口可运行）
 ```
 
-- 运行前需 `cp config/config.example.toml config/config.toml`；`config.toml` 已 gitignore，只提交 `config/*.example.toml`。
+- 运行前需 `cp config/config.example.toml config/config.toml`；`config.toml`、`data/`、`logs/` 已 gitignore，只提交 `config/*.example.toml`。
+- FFmpeg 必须安装并配置在 PATH 中（`ffmpeg` / `ffprobe`）；测试完全离线，subprocess 在边界打桩。
 - 验证手段 = pytest + ruff check + pyrefly check；formatter 用 Ruff Format（`pyproject.toml` 的 `[tool.ruff.format]`）。
 
 ## 类型检查（权威配置：pyproject.toml 的 [tool.pyrefly]）
@@ -47,14 +48,14 @@ uv run python scripts/smoke_test.py "dist/SmartArchiver-*.zip" # 对发行 zip �
 
 ## 架构速览
 
-- 运行入口：`main.py` 仅 CLI 解析与分发；运行路径在 `src/app/runtime.py`，控制子命令 start/log/stop 在 `src/app/control.py`。
-- 加载期：`src/app/config.py` 的 `ConfigManager`（Pydantic）完成所有仅凭配置即可判定的校验，单任务/单远端条目错误记日志跳过、不致命；`src/core/task_config.py` 定义按 mode 判别的任务配置模型，`src/core/task_plan.py` 的 `resolve_tasks()` 完成逐任务校验与 id/depends_on 静态校验。
-- 运行期：`src/core/registry.py` 维护 mode → handler 映射（新增模式在此注册，并在 `task_config.TASK_MODELS` 声明模型）；处理器在 `src/core/handlers/`，基类 `BaseTaskHandler` 只做外部条件校验；"前置任务是否完成"由 `app/runtime.py` 的任务循环判定。
-- 目标 I/O：dest 串解析与目标读写的唯一入口是 `src/core/dest.py`；约定：目标目录读写必须经 `core.dest`，`fs` 仅用于本地路径；SSH 远端操作在 `src/ssh/ops.py`。
-- 规则引擎：`src/core/filters.py` 顺序流水线 include → exclude → delete → TRANSFER，命中即停，运行期只做匹配；原语在 `src/core/patterns.py`。
+- 运行入口：`main.py` 仅 CLI 解析与分发；运行路径在 `src/app/runtime.py`，控制子命令 start/log/stop/run-once 在 `src/app/control.py`。
+- 加载期：`src/app/config.py` 的 `ConfigManager`（Pydantic）完成所有仅凭配置即可判定的校验，单任务条目错误记日志跳过、不致命；`src/core/task_config.py` 定义任务配置模型（transcode）与 `[tasks.filter]` 过滤模型，`src/core/task_plan.py` 的 `resolve_tasks()` 完成逐任务校验（含目录嵌套关系）与 id/depends_on 静态校验。
+- 运行期：`src/core/registry.py` 维护 mode → handler 映射（新增模式在此注册，并在 `task_config.TASK_MODELS` 声明模型）；处理器在 `src/core/handlers/`，基类 `BaseTaskHandler` 只做模板方法编排；"前置任务是否完成"由 `app/runtime.py` 的任务循环判定。
+- 领域层：`src/core/media/` 是 FFmpeg 领域包——`parsing.py`（配置值解析，IEC 80000-13 单位语义）、`probe.py`（ffprobe 封装，异常降级全零默认值）、`filter.py`（文件名分类流水线 + 媒体属性匹配）、`ffmpeg.py`（命令模板填充与子进程托管执行）。
+- 状态库：`src/core/state.py` 的 `StateManager`（SQLite）是防重复处理、失败计数与 fallback 切换的唯一依据；记录以 (task_key, filepath) 隔离，成功快照含源文件 size/mtime（内容变化后重处理）。
 - 底层：本地文件 I/O 原语在 `src/fs/`（仅标准库）；共享校验基建 `src/validation.py`（仅 pydantic，所有包可导入）；共享平台探测 `src/platform_info.py`（运行平台判定的唯一入口）。
-- `AppContext`（`src/app/context.py`）是全局单例，logger / history 经 `AppContext.get()` 获取；测试 fixture 用完会重置单例。
-- 依赖方向（必须无环）：`app/` 可依赖全部；`core/` → `fs/`、`output/`、`remote/`、`ssh/`；`remote/`、`ssh/` → `fs/`；`output/` → `fs/`、`core/patterns`。领域包不得依赖 `app/` 的装配模块（runtime/control），需要 app 层能力时由组合根注入；唯一例外是文档化的 `AppContext` 与 `app.paths` 等叶子助手；`TYPE_CHECKING` 下的类型级 import 不构成违规。
+- `AppContext`（`src/app/context.py`）是全局单例，logger / state 经 `AppContext.get()` 获取；测试 fixture 用完会重置单例。
+- 依赖方向（必须无环）：`app/` 可依赖全部；`core/` → `fs/`、`output/`、`core.media`；`output/` → `fs/`。领域包不得依赖 `app/` 的装配模块（runtime/control），需要 app 层能力时由组合根注入；唯一例外是文档化的 `AppContext` 与 `app.paths` 等叶子助手；`TYPE_CHECKING` 下的类型级 import 不构成违规。
 
 ## 测试约定（权威文档：tests/README.md）
 
@@ -63,10 +64,15 @@ uv run python scripts/smoke_test.py "dist/SmartArchiver-*.zip" # 对发行 zip �
 ## 平台与版本约束
 
 - Python 3.14+。CI 测试矩阵为 ubuntu + macos + windows × Python 3.14–3.15。
-- sync 模式调用外部进程：Linux 用 rsync，Windows 用 rclone（需在 PATH）。同步语义本身不测，测试只断言传给工具的命令行参数。
+- 代码必须保持跨平台；Docker 运行环境基于 Debian，带 VAAPI/NVIDIA GPU 驱动与静态构建的 FFmpeg。
+- FFmpeg 命令模板由用户编写、经 `shell=True` 执行：`{input}`/`{output}` 占位符经 Python `.format()` 填充——模板中出现其他字面量 `{` 会在加载/运行期报错，路径要加引号。
 
 ## 提交与发布（权威文档：RELEASE-GUIDE.md）
 
 - 仅当维护者主动要求时执行对应流程，不得自行提交、推送或发布：
   - 要求提交变更 → 执行 RELEASE-GUIDE.md 的提交流程（前置：仓库存在未提交的变更）。
   - 要求发布版本 → 执行 RELEASE-GUIDE.md 的发布流程（前置：`pyproject.toml` 的 version 字段存在未提交的变更）。
+
+## 约定
+
+- README.md 是 `config.toml` 的中文配置向导；新增配置项时，需同时更新 README.md 和 `config/config.example.toml`。

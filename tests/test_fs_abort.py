@@ -96,4 +96,4 @@ def test_atomic_writer_cleans_temp_on_abort_inside_block(tmp_path):
 def _partial_files(directory):
     if not os.path.isdir(directory):
         return []
-    return [n for n in os.listdir(directory) if n.endswith(".sa-part")]
+    return [n for n in os.listdir(directory) if n.endswith(".mc-part")]

@@ -56,7 +56,7 @@
 1. 确定上个正式版 tag（`git describe --abbrev=0 --match='v*' --exclude='*-dev'`），分析 `git log --oneline <tag>..HEAD`，以 `## 未发布` 段落为底稿核对、补全。
 2. 将发布内容写入新段落 `## [x.y.z] - YYYY-MM-DD`（日期为发布当日），置于 `## 未发布` 之后、上一个正式版段落之前；仅包含用户可感知的变更。
 3. 清空 `## 未发布` 段落的条目（保留标题），供下个开发周期累积。
-4. 在文件底部链接区最上方追加一行：`[x.y.z]: https://github.com/HexStan/SmartArchiver/releases/tag/vx.y.z`。
+4. 在文件底部链接区最上方追加一行：`[x.y.z]: https://github.com/HexStan/MediaConveyor/releases/tag/vx.y.z`。
 
 ### 第 3 步：合并提交 pyproject.toml、CHANGELOG.md 与 uv.lock
 
@@ -145,7 +145,7 @@ Docker 镜像的构建与推送由 CI（`.github/workflows/docker-publish.yml`�
 
 ---
 
-[x.y.z]: https://github.com/HexStan/SmartArchiver/releases/tag/vx.y.z
+[x.y.z]: https://github.com/HexStan/MediaConveyor/releases/tag/vx.y.z
 ```
 
 - 条目为一句话中文描述，面向用户；段落之间以 `---` 分隔。

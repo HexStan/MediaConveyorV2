@@ -4,35 +4,45 @@ FROM python:3.14-slim-trixie
 # 设置环境变量，确保 Python 输出不被缓冲，以便日志能实时显示
 ENV PYTHONUNBUFFERED=1
 
-# 多架构构建的目标架构（BuildKit 注入，取值 amd64/arm64，与 rclone 发布包命名一致）
-ARG TARGETARCH
+# 启用 non-free 和 contrib 仓库以安装硬件加速驱动
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+    sed -i 's/Components: main.*/Components: main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources; \
+    else \
+    sed -i 's/main/main contrib non-free non-free-firmware/g' /etc/apt/sources.list; \
+    fi
 
-# 安装 rsync、SSH 客户端及 sshpass（用于 SSH 远端同步）
+# 安装 GPU 加速驱动与静态构建的 FFmpeg（Debian 源的 ffmpeg 版本较旧，且不带
+# 完整的 VAAPI/NVENC 支持）：
+# - intel-media-va-driver-non-free: Intel QSV/VAAPI（仅 amd64）
+# - mesa-va-drivers: AMD VAAPI
+# - nvidia-vaapi-driver: NVIDIA VAAPI（仅 amd64）
+# - FFmpeg 取 BtbN 的 n8.1 静态构建（amd64/arm64 双架构分支）
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends rsync openssh-client sshpass && \
+    apt-get install -y --no-install-recommends \
+    vainfo \
+    mesa-va-drivers \
+    wget \
+    xz-utils && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then \
+    apt-get install -y --no-install-recommends \
+    intel-media-va-driver-non-free \
+    nvidia-vaapi-driver; \
+    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"; \
+    FFMPEG_DIR="ffmpeg-n8.1-latest-linux64-gpl-8.1"; \
+    elif [ "$ARCH" = "arm64" ]; then \
+    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz"; \
+    FFMPEG_DIR="ffmpeg-n8.1-latest-linuxarm64-gpl-8.1"; \
+    fi && \
+    wget -qO /tmp/ffmpeg.tar.xz "$FFMPEG_URL" && \
+    tar -xf /tmp/ffmpeg.tar.xz -C /tmp && \
+    chmod +x /tmp/$FFMPEG_DIR/bin/* && \
+    cp -a /tmp/$FFMPEG_DIR/bin/* /usr/local/bin/ && \
+    rm -rf /tmp/ffmpeg.tar.xz /tmp/$FFMPEG_DIR && \
     rm -rf /var/lib/apt/lists/*
 
 # 设置工作目录
 WORKDIR /app
-
-# 先复制依赖清单（[tool.smartarchiver] 同时声明内置 rclone 版本，供下方读取；
-# 此层在常驻工具的 apt 层之后，pyproject.toml 变更不影响该层缓存）
-COPY pyproject.toml .
-
-# 安装官方固定版本的 rclone（版本唯一出处：pyproject.toml 的 [tool.smartarchiver].rclone_version，
-# 可执行文件构建（scripts/build_executable.py）读取同一处。Debian 源的 rclone 版本过旧，
-# 故从官方发布地址下载 .deb 包并用 dpkg 安装（安装后位于 /usr/bin/rclone）。下载必须走
-# curl——该站点的 Cloudflare 防护按 User-Agent 拦截，Python urllib 的默认 UA 会被 403；
-# curl 仅此处一次性使用，故在本层内即装即用即删（连同其独占依赖），不落入最终镜像）
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
-    RCLONE_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["tool"]["smartarchiver"]["rclone_version"])') && \
-    curl -fsSL -o /tmp/rclone.deb "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-${TARGETARCH}.deb" && \
-    dpkg -i /tmp/rclone.deb && \
-    rm -f /tmp/rclone.deb && \
-    rclone version && \
-    apt-get purge -y --auto-remove curl && \
-    rm -rf /var/lib/apt/lists/*
 
 # 安装依赖层（源码变更时此层缓存仍可复用）：
 # uv 通过 BuildKit bind mount 从官方镜像临时挂载，仅本条 RUN 期间可见、不落入
@@ -43,16 +53,20 @@ RUN apt-get update && \
 # --only-group runtime 只装运行依赖组（uv sync 默认会装 dev 组）；
 # --no-install-project 项目无 [build-system]（虚拟项目），显式声明不安装项目本身；
 # UV_COMPILE_BYTECODE=1 预编译字节码，对齐 pip 安装的默认行为，首次启动免编译
-COPY uv.lock ./
+COPY pyproject.toml uv.lock ./
 RUN --mount=from=ghcr.io/astral-sh/uv:0.13.5,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/root/.cache/uv \
     UV_COMPILE_BYTECODE=1 uv sync --locked --only-group runtime --no-install-project
 
-# venv 中的解释器与依赖优先于系统 Python（ENTRYPOINT 的 python 解析到 venv）
+# venv 中的解释器与依赖优先于系统 Python（CMD 的 python 解析到 venv）
 ENV PATH="/app/.venv/bin:$PATH"
 
 # 复制项目文件
 COPY . .
 
-ENTRYPOINT ["python", "main.py"]
-CMD []
+# NVIDIA GPU 支持环境变量（配合 docker-compose 的 deploy.resources 段）
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
+# 默认前台运行；docker-compose 以 start 子命令拉起分离式实例
+CMD ["python", "main.py"]

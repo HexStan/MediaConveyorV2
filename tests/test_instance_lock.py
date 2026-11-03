@@ -169,7 +169,7 @@ def test_blank_instance_name_uses_default():
 
 def test_path_style_instance_name_falls_back_to_default():
     """路径写法非法：回退默认标识并标记。"""
-    assert resolve_instance_name("/tmp/smartarchiver", DEFAULT_INSTANCE_NAME) == (
+    assert resolve_instance_name("/tmp/mediaconveyor", DEFAULT_INSTANCE_NAME) == (
         DEFAULT_INSTANCE_NAME,
         True,
     )

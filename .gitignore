@@ -19,7 +19,7 @@ dist/
 
 # 运行时生成的文件
 logs/
-failure_history.json
+data/
 
 # 本地测试数据（最小化配置的 source/dest 目录）
 source/
@@ -28,8 +28,6 @@ dest/
 # 本地配置（仓库只提交 config/*.example.toml）
 config.toml
 config.backup.toml
-config.server.toml
-config.server.backup.toml
 
 # SSH 目录（仓库根，密钥等本地文件）
 /ssh/

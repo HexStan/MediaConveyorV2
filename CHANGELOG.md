@@ -2,471 +2,356 @@
 
 ---
 
+## 0.1.0-dev
+
+### 破坏性变更
+
+- 项目基于 SmartArchiver 的常驻任务骨架全面重构，配置文件格式与 1.x 完全不兼容：
+  任务定义迁移至 `[[tasks]]` + `mode = "transcode"`，过滤条件迁移至 `[tasks.filter]`
+  （原 `[tasks.filter]` 字段名保持一致，新增范围型媒体属性条件的加载期校验）。
+- 全局节变更：`scan_interval` 由 `[schedule]` 调度节取代（省略该节 = 一次性运行；
+  `interval_seconds` 等价原 `scan_interval`；新增 cron 模式）。
+- 状态库文件位置变更：`data/` 目录下为 `state.db`（沿用 SQLite，表结构新增任务隔离键
+  与源文件 size/mtime 快照；旧库不迁移，首次启动视为全新状态）。
+- 新增 `data_dir` 配置项（默认 `./data`）；`log_dir` / `data_dir` 相对路径改以程序所在
+  目录为基准解析，不再跟随工作目录。
+
+### 新增
+
+- 基于骨架获得的实例控制能力：`start`（分离式后台实例）/ `log`（滚动显示日志）/
+  `stop`（三级停止：默认完成当前文件、`--fast` 立即中止、`--slow` 完成本轮）/
+  `run-once`（让休眠中的实例立即执行一轮）子命令；单实例锁在 Windows 上同样生效。
+- 调度能力：`[schedule]` 支持 `interval` 与 `cron` 两种模式及 `first_run_delay` 首轮延迟。
+- 任务依赖：`depends_on` 声明前置任务，前置任务本轮完成后才执行（配置顺序即执行顺序）。
+- 配置热重载：运行中修改 `config.toml` 自动生效，加载失败回退备份配置。
+- `ffmpeg_timeout` 配置项：单文件转码超时（秒），超时终止 FFmpeg 进程并按失败计数。
+- 多任务重叠源目录的状态隔离：状态记录以任务身份为键，互不串扰。
+
+### 修复
+
+- 源文件成功处理后被替换为新内容时，此前永不重新处理；现记录成功时的源文件
+  size/mtime，内容变化后自动重新转码。
+- FFmpeg 子进程不再失控：登记到生命周期协调器，`stop --fast` 时整树终止，
+  不再遗留孤儿进程；stdout 管道改为丢弃，消除潜在的无输出死锁。
+- `stable_duration` 的等待不再阻塞整个监听循环：睡眠分片化，可被停止指令立即打断。
+- 过滤条件只认 `size = { min = ..., max = ... }` 字典写法，字符串误写此前被静默当作 0；
+  现在所有范围条件在加载期解析，非法值显式报错。
+- ffprobe 失败信息此前仅 print 到控制台、不进日志文件；现统一经日志系统输出。
+- 消除过滤未触发 ffprobe 时的二次 ffprobe 调用（日志展示不再重复探测）。
+- 备份目录移动失败此前会中断整个监听循环；现按单文件失败计数兜底。
+- 容量与码率单位语义统一遵循 IEC 80000-13（1KB=1000B、1KiB=1024B；码率十进制
+  1K=1000bps），修复原码率解析 1024 进制与容量 1000 进制不一致的问题。
+- Windows 单实例锁真正生效（msvcrt 实现）；进程树终止前校验可执行文件名，防 PID 复用误杀。
+
+### 变更
+
+- 解析器依赖由 humanfriendly 迁移至 humanize（展示）与 pydantic ByteSize（容量）。
+- FFmpeg 进度输出经日志系统 5 秒节流记录，进入日志文件（原仅控制台单行覆盖打印）。
+- PyInstaller 可执行发行包不再内置第三方工具，运行要求 PATH 中已安装 FFmpeg；
+  Docker 镜像内置静态构建的 FFmpeg 与 VAAPI/NVIDIA 驱动，行为不变。
+
+---
+
+# 历史版本（MediaConveyor 1.x）
+
+> 以下为重构前 1.x 系列的原始变更日志，供追溯。
+
+---
+
+---
+
 ## 未发布
 
-### 破坏性变更
-
-- 原本所有“-1 表示不限制大小”的语义全部统一为 0。
-
 ### 新增
 
-- 删除统计新增体积记录：任务汇总日志的“根据规则删除 N 项”现在附带显示删除的总体积，目录删除按递归大小计入。
-
-### 迁移指南
-
-#### 1. 规则阈值 `-1` 改写为 `0`
-
-旧配置中 `ge` 阈值用 `-1` 表示"匹配所有大小（不受大小限制）"，升级后需改写为 `0`：
-
-```toml
-[tasks.delete_rules]
-ge."*" = -1   # 旧写法：匹配所有大小
-```
-
-改为：
-
-```toml
-[tasks.delete_rules]
-ge."*" = 0    # 新写法：匹配所有大小
-```
-
-如不改写则无法通过容量解析，任务在启动期配置校验时报错并被跳过。rotate 模式的 `size_limit` / `count_limit` 写 `0` 表示不限制，不受本次变更影响。
-
----
-
-## [0.39.2] - 2026-10-29
-
-### 破坏性变更
-
-- 配置项 `lock_file` 更名为 `instance_name`（无后缀的实例标识名），旧键不再生效；锁/控制/PID 文件统一由程序存放在系统临时目录，仅接受纯名称、不再支持自定义路径。实例标识是同一份程序副本的身份证：锁文件（`<标识>.lock`）、控制文件（`<标识>.ctl`）、PID 文件（`<标识>.pid`）与日志文件前缀均由它派生，多副本部署时锁、控制通道与日志完全隔离。
-- 定时调度模式下实例锁的持有范围从“每轮任务执行期间”扩展为“整个进程生命周期”：调度空闲期同样阻止第二个实例运行，`stop` 子命令也能在此期间定位到实例。
-- 容量阈值解析遵循 IEC 80000-13 单位语义：`KB`/`MB`/`GB`/`TB` 按十进制（1 KB = 1000 B），`KiB`/`MiB`/`GiB`/`TiB` 按二进制（1 KiB = 1024 B）。
-- 配置项 `mtime_threshold_minutes` 重命名为 `mtime_threshold_seconds`，单位由分钟改为秒；旧键不再生效，未改名时取默认值 `0`（无时间限制）。
-- 全局配置项 `max_retries` 下放为任务级选配项（move / copy / rotate 可用），全局键不再生效，未配置时使用默认值 3。
-- sync 模式配置项 `create_backups` 改为 `backup_dir`（备份目录路径）：
-  - 同步中被替换/删除的文件移入 `[backup_dir]/[时间戳]` 目录，不再固定使用目标目录下的 `.smart-archiver.backups`。
-  - `backup_dir` 不能位于 `source` / `dest` 之下（否则任务在加载时报错跳过）。
-  - `dest` 目录为 SSH 远端时，须为远端主机上的绝对路径。
-  - 旧键不再生效。
-- 原本在 sync 模式中，与排除规则匹配的文件在 dest 中会被保留，现在会删除，保证 dest 与 source 完全一致。
-
-### 新增
-
-- 实例锁支持 Windows（通过 `msvcrt.locking`），覆盖 Linux / macOS / Windows 全平台，且默认启用；server 模式启动时同样持有实例锁，防止多个服务实例同时运行。
-- 新增运行子命令 `start` / `log` / `stop` / `run-once`：
-  - 命令一览：
-    - `start`：以脱离终端的方式运行实例（关闭终端不受影响），随后在本窗口滚动显示运行日志；`--quiet`：不跟随日志，分别确认实例已启动、指令已受理后输出一行确认即返回，否则输出提示并以非零退出码结束，适合脚本调用。
-    - `log [-n N]`：滚动显示运行日志（默认最近 100 行），自动跟随跨天轮转产生的新日志文件。
-    - `stop`：当前文件传输完成后停止；`--slow`：本轮任务结束后停止；`--fast`：立即中止当前文件传输、清理已写入的临时文件并退出，5 秒内未退出则按进程树强制结束。`--fast` 与 `--slow` 互斥。
-    - `run-once`：让处于调度休眠期（等待下次运行，含首轮延迟等待期）的客户端实例立即执行一轮任务并滚动显示运行日志，下次运行时间按执行后的时刻重新计算；实例不存在、正在执行任务或未配置 `[schedule]` 时拒绝执行；`--quiet`：与 `start --quiet` 类似，不跟随日志，确认指令已受理后输出一行确认即返回。
-  - 除 `run-once` 以外，即使未配置 `[schedule]` 也可使用。
-  - 停止指令经由系统临时目录的控制文件传递，运行实例内的监视线程实时响应；空闲等待调度期间收到任何 stop 指令立即退出。
-  - `stop --fast` 对 sync 模式的特殊处理：rsync/rclone 及其子进程整树终止，不留孤儿进程（基于 psutil）。
-  - 可与 `--server` 组合，如 `--server start`；`stop` 不接受参数，行为与客户端模式下的`stop --fast`大致等价。
-- 文件传输与远端上传改为原子写入：先写入目标同目录的临时文件再原子替换，传输中断或失败不再留下不完整的目标文件。
-- 新增任务级选配配置项 `source_quiet_seconds`（全模式生效）：源目录的最新修改时间距今不超过该秒数时，本轮整个任务跳过。适合定时高频运行时等待正在写入的目录静置后再归档。
-- 新增任务依赖机制：任务可用选配项 `id` 作为唯一标识，`depends_on` 列出的全部前置任务在同一轮执行中完成后，后置任务才会执行；前置任务失败或被跳过时，后置任务级联跳过。
-- sync 模式新增任务级选配配置项 `exclude_from`：排除规则文件路径列表（可配置多个），原样透传给 rsync / rclone 的 `--exclude-from` 选项，适合维护大量排除条目或在多个任务间复用；运行时任一文件缺失，任务报错跳过。
-- 给 Docker 镜像加入了 rclone，版本与可执行文件自带的rclone对齐。现在 Docker 版本也可指定使用 rclone 来同步。
-
-### 修复
-
-- HTTP 远端路径为 Windows 盘符路径时被错误补上前导斜杠的问题。
-- 远端别名未配置或类型未知时，会回退为本地路径的问题。
-- rclone 同步时，日志出现双重时间戳的问题。
-- 在 macOS 平台上，当一个目录内存在多个修改时间相同的文件时，排列顺序与其他平台不一致，导致可能会出现的误删问题。
-- 使用 rclone 同步时会输出无用的 `NOTICE` 日志的问题。
+- 基于 fnmatch 模式的文件过滤流水线（`[tasks.filter]`）：
+  - `include_patterns`：指定要识别的文件，不填或为空则包含所有文件。
+  - `exclude_patterns`：匹配到的文件将被跳过。
+  - `passthrough_patterns`：匹配到的文件不经过 FFmpeg，直接移动到目标目录（仍受 `file_mtime` 约束）。
+  - 三者均以 fnmatch 语法匹配相对于 `source_dir` 的文件路径（不区分大小写，路径分隔符统一为 `/`），按 include → exclude → passthrough 的顺序过滤，支持按目录、路径关键字等更灵活的匹配方式。
 
 ### 变更
 
-- 任务配置中的无效容量/数量值不再静默按 0 处理或引发未知错误，统一记录错误日志并跳过对应任务。
-- 优化了容器 / 系统停服的退出流程，退出行为与 `stop --fast` 等效。
-- 增强了 `dest` 路径的解析流程，避免了一些可能发生的边界问题。
-- 文件传输、文件删除、空目录清理与旧备份清理改为操作开始前播报，同步精简出错日志。
-- 优化了目标路径合法性检验和异常处理逻辑，现在错配目标类型会在任务初始化阶段报错，不再增加错误计数。
-- 增大 HTTP 文件传输的分块大小至 1MB 以优化传输性能。
-- 配置合法性校验环节前移至启动期，大部分配置填写问题将在启动后立即显示。
-- `http_remotes` / `ssh_remotes` 的无效条目（缺必填、格式错误、数值越界）改为记警告日志并跳过，不再静默忽略；重复别名改为先出现者生效。
-- 提高了 rclone 同步时的输出信息透明度。
-- 消除了 rclone 同步时不必要的输出信息。
-- rclone 同步时的同时传输文件数量修改为 1。
-- `mtime_threshold_seconds` 改为选填配置项，不配置此项时默认为 `0`（无时间限制）。
-- `remove_empty_dirs` 改为选填配置项，不配置此项时默认为 `false`。
-- 优化了 `tasks = [{ mode = "sync", tool = "auto" }]` 设置下的工具选择逻辑。
-- 优化了 HTTP 传输时的文件信息获取逻辑。
+- 状态存储从 JSON 文件迁移至 SQLite 数据库（`data/` 目录），提升数据一致性与查询效率。
+- 未配置任何文件名过滤条件时，程序默认处理源目录中的所有文件（此前默认仅处理 `.mp4` 文件）。
 
-### 迁移指南
+### 移除
 
-#### 1. `lock_file` 改为 `instance_name`
+- 配置项 `input_formats` 和 `direct_move_formats` 已移除，由 `include_patterns` 和 `passthrough_patterns` 取代。
 
-旧配置：
+### 破坏性变更
+
+- 状态文件路径变更：`logs/state.json` → `data/` 目录下的 SQLite 数据库。
+- Docker 用户需在 `docker-compose.yml` 中新增 `./data:/app/data` 卷挂载，以确保数据库文件持久化。
+- 文件过滤配置从扩展名列表（`input_formats`/`direct_move_formats`）改为 fnmatch 模式列表（`include_patterns`/`exclude_patterns`/`passthrough_patterns`）。旧配置项不会自动迁移，需手动转换（见迁移指南）。
+
+### 迁移指南（v4.x -> 未发布）
+
+#### 1. 状态存储迁移
+
+本版本不再提供自动数据迁移。v4.x 及更早版本的 JSON 状态数据（`logs/state.json`）不会迁移至 SQLite，首次启动时视为全新状态，所有文件将被重新扫描，此前的失败计数与处理成功时间记录将丢失。
+
+#### 2. 文件过滤配置迁移
+
+旧配置不会自动转换，请参考以下对照关系手动修改：
 
 ```toml
-lock_file = "/tmp/smartarchiver.lock"
+# v4.0.0
+[tasks.filter]
+input_formats = ["mp4", "mkv"]
+direct_move_formats = ["srt"]
+
+# 手动转换后
+[tasks.filter]
+include_patterns = ["*.mp4", "*.mkv"]
+exclude_patterns = []
+passthrough_patterns = ["*.srt"]
 ```
 
-改为：
+**注意默认行为变化**：如果旧配置未显式设置 `input_formats`（旧版默认仅处理 `.mp4` 文件），转换后 `include_patterns` 为空，程序将处理源目录中的**所有文件**。如需保持原行为，请手动添加：
 
 ```toml
-instance_name = "smartarchiver"
+[tasks.filter]
+include_patterns = ["*.mp4"]
 ```
 
-未修改时旧键会被忽略（不产生任何效果），程序回退默认实例标识；需要同时运行多个实例时，为每份程序配置不同的 `instance_name`。
+#### 3. Docker 用户
 
-#### 2. 容量单位语义遵循 IEC 80000-13
+需在 `docker-compose.yml` 中新增 `data` 卷挂载：
 
-容量阈值单位现分为十进制与二进制两套：`KB`/`MB`/`GB`/`TB` 按十进制（1 KB = 1000 B），`KiB`/`MiB`/`GiB`/`TiB` 按二进制（1 KiB = 1024 B）。旧版本不区分两套单位，一律按二进制（1024 进制）解析，因此升级后 `GB`/`TB` 等十进制单位表示的阈值会小于升级前（如 `1GB` 由 2³⁰ B 变为 10⁹ B）。受影响的配置项包括 rotate 的 `size_limit`、`rotate_rules.size` 以及规则中的 `lt`/`ge` 大小阈值。
-
-希望保持升级前的阈值时，把单位改为对应的二进制单位。
-
-旧配置：
-
-```toml
-size_limit = "10GB"    # 旧语义：10 × 1024³ B
+```yaml
+volumes:
+  - ./config:/app/config
+  - ./data:/app/data      # 新增此行
+  - ./logs:/app/logs
 ```
 
-改为：
+---
 
-```toml
-size_limit = "10GiB"   # 新语义：10 × 1024³ B，与升级前一致
+## 旧版本号体系（v1.0.0 – v4.0.0）
+
+> **注**：项目版本号已于 2026-10 重置，自 `0.7.0-dev` 起采用新的版本号体系重新开始迭代。以下 v1.0.0 至 v4.0.0 为旧版本号体系下的历史记录，与当前版本体系不连续；对应的 Tag 与 GitHub Release 已一并清理归档。
+
+---
+
+## [4.0.0] - 2026-06-26
+
+### 新增
+
+- `backup_dir` 现为可选项。当留空且 `remove_source = false` 时，源文件处理完成后保留在原位置不做移动。
+
+### 移除
+
+- **命令行参数**：`-c` / `--config`、`--log-dir`、`--state-file` 已移除。配置文件路径固定为 `config/config.toml`，状态文件路径固定为 `logs/state.json`。
+- **环境变量覆盖**：不再支持通过以下环境变量覆盖配置项：
+  - `VIDEOWATCHDOG_SCAN_INTERVAL`
+  - `VIDEOWATCHDOG_LOG_DIR`
+  - `VIDEOWATCHDOG_MAX_LOG_FILES`
+  - `VIDEOWATCHDOG_LOG_LEVEL`
+  - `VIDEOWATCHDOG_SOURCE_DIR`
+  - `VIDEOWATCHDOG_DEST_DIR`
+  - `VIDEOWATCHDOG_BACKUP_DIR`
+  所有配置现仅通过 `config/config.toml` 设置。
+
+### 破坏性变更
+
+- 命令行参数完全移除。此前通过 `-c`、`--log-dir`、`--state-file` 传参的启动方式不再有效。
+- 环境变量覆盖完全移除。此前通过 `VIDEOWATCHDOG_*` 环境变量覆盖配置的方式不再有效。
+- 状态文件内部 JSON 结构变更（扁平结构 → 分类结构）。v3.x 格式的状态文件在首次启动时视为空，此前的失败计数与处理成功时间记录将丢失。
+
+### 迁移指南（v3.x -> v4.0.0）
+
+#### 1. CLI 参数移除
+
+如果之前通过命令行参数指定路径，请改为在 `config/config.toml` 中配置：
+
+```
+# v3.x 使用方式（不再可用）
+python main.py -c /path/to/config.toml --log-dir /var/log --state-file /var/state.json
+
+# v4.0.0 使用方式
+python main.py
+# 配置文件固定为 config/config.toml
+# 日志目录在 [global] 中设置 log_dir
+# 状态文件固定为 logs/state.json
 ```
 
-同时，旧版本对无法解析的容量值（如单位拼写错误）静默按 0 处理，新版会记录错误并跳过任务；升级后如出现此类日志，请将对应值修正为合法的容量字符串。
+#### 2. 环境变量覆盖移除
 
-#### 3. `mtime_threshold_minutes` 改为 `mtime_threshold_seconds`
+如果之前在 Docker 或 systemd 等环境中通过环境变量覆盖配置：
 
-move / copy 模式的修改时间阈值配置项重命名，单位由分钟改为秒，旧键不再生效。
-
-旧配置：
-
-```toml
-mtime_threshold_minutes = 180    # 180 分钟 = 3 小时
+```yaml
+# v3.x (docker-compose.yml)
+environment:
+  - VIDEOWATCHDOG_LOG_LEVEL=DEBUG
+  - VIDEOWATCHDOG_SOURCE_DIR=/custom/source
 ```
 
-改为：
+请改为直接在 `config/config.toml` 中设置对应项：
 
 ```toml
-mtime_threshold_seconds = 10800  # 10800 秒 = 3 小时，与升级前一致
-```
+# config/config.toml
+[global]
+log_level = "DEBUG"
 
-未改名时旧键会被忽略，修改时间阈值取默认值 `0`（无时间限制）。
-
-#### 4. `max_retries` 下放为任务级配置
-
-全局 `max_retries` 键不再生效，改为在每个任务块内选配，未迁移时会被静默忽略。
-
-旧配置（全局）：
-
-```toml
-max_retries = 5
-```
-
-改为（任务级，仅需要调整容忍度的任务需配置）：
-
-```toml
 [[tasks]]
-mode = "move"
-source = "/data/inbox"
-dest = "/data/archive"
-max_retries = 5
+source_dir = "/custom/source"
 ```
 
-#### 5. sync 模式 `create_backups` 改为 `backup_dir`
+#### 3. 状态文件格式变更
 
-`create_backups` 不再支持，改为显式指定备份目录；旧键会被忽略（不产生任何效果），未迁移时同步中被替换/删除的文件将直接删除、不做备份。
-
-旧配置：
-
-```toml
-create_backups = true
-```
-
-改为（在任务块内指定备份目录）：
-
-```toml
-backup_dir = "/data/sync-backups"
-```
-
-注意：
-
-- `backup_dir` 不能位于 `source` / `dest` 之下。
-- `dest` 目录为 SSH 远端时，须为远端主机上的绝对路径（以 `/` 开头）。
-- 旧版本的备份存放在 dest 下的 `.smart-archiver.backups/`，新配置禁止 `backup_dir` 位于 dest 之下，无法直接沿用该位置；且升级后的首次同步会把该目录当作多余内容从 dest 删除。如需保留其中的历史备份，请在升级前手动移出 dest。
+旧版状态文件 `logs/state.json` 的数据（失败计数、处理成功时间）不会迁移到新格式，首次启动相当于全新状态，所有文件将被重新扫描。如有依赖状态记录的上下游逻辑，需注意此行为变化。
 
 ---
 
-## [0.29.3] - 2026-10-15
+## [3.0.0] - 2026-06-15
 
 ### 新增
 
-- 新增打包版可执行文件（PyInstaller onedir），覆盖 Windows/macOS × AMD64/ARM64，内置 rclone、附带示例配置，sync 模式开箱即用；发布 Release 时自动附加至 Assets，开发版（`-dev` 版本号）构建输出至工作流 Artifacts。
-- sync 模式 `tool = "auto"` 时优先使用打包版内置的 rclone，内置不可用时回退系统工具：Windows 使用 PATH 中的 rclone，macOS/Linux 使用 PATH 中的 rsync。
-- 打包版可执行文件支持服务器模式（`--server`），配置文件与日志均位于可执行文件同级目录。
+- 可配置的日志等级（`log_level`），支持 `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`。设置为 `DEBUG` 时会输出详细的文件跳过原因。
+- 文件过滤器（`[tasks.filter]`），支持按以下条件筛选文件：
+  - 文件大小（`size`），支持 `"1MB"` 等可读格式。
+  - 媒体时长（`duration`），支持 `"10s"`、`"30m"`、`"2h"` 等格式。
+  - 视频/音频/总比特率（`video_bitrate`、`audio_bitrate`、`total_bitrate`），支持 `"100K"`、`"10M"`、`"1MBPS"` 等格式。
+  - 帧率（`framerate`）。
+  - 视频短边分辨率（`short_side`）。
+  - 按编码器排除（`exclude_video_codecs`、`exclude_audio_codecs`），如 `["hevc", "av1"]`。
+- 直接移动格式（`direct_move_formats`），指定后缀的文件会跳过 FFmpeg 处理，直接从源目录移动到目标目录。
+- 源文件删除选项（`remove_source`），设置为 `true` 后处理成功直接删除源文件，不再保留备份。
+- 延迟删除选项（`source_expired_minutes`），配合 `remove_source` 使用，处理完成后保留源文件指定分钟数再删除。
+- 所有日志消息添加任务名称前缀（如 `【Task 1】`），便于多任务场景下区分。
+- 命令行参数支持：
+  - `-c` / `--config`：指定配置文件路径。
+  - `--log-dir`：覆盖日志目录。
+  - `--state-file`：覆盖状态文件路径。
+- 环境变量覆盖支持：
+  - `VIDEOWATCHDOG_SCAN_INTERVAL`、`VIDEOWATCHDOG_LOG_DIR`、`VIDEOWATCHDOG_MAX_LOG_FILES`、`VIDEOWATCHDOG_LOG_LEVEL`。
+  - `VIDEOWATCHDOG_SOURCE_DIR`、`VIDEOWATCHDOG_DEST_DIR`、`VIDEOWATCHDOG_BACKUP_DIR`。
+- Docker 多架构支持：通过 BtbN 静态构建分别支持 amd64 和 arm64。
+- 智能 ffprobe 优化：仅在过滤器需要媒体元数据时才调用 ffprobe，无需时长/比特率/编码器等条件时跳过，提升性能。
+
+### 变更
+
+- 扫描间隔改为全局参数，所有任务共享同一个 `scan_interval` 计时周期。
+- 术语更新：日志和文档中将"转码"改为"处理"，"监控"改为"监听"。
+- Docker 镜像中的 FFmpeg 安装方式从 apt 改为下载 BtbN 静态构建。
+- Docker Compose 默认挂载路径从 `./input`/`./output`/`./processed` 改为 `./source`/`./dest`/`./backup`。
+- 状态文件内部格式变更，旧格式的状态文件首次启动时将被视为空。
 
 ### 修复
 
-- Windows 下通过管道或重定向输出中文（如 `--help`）因系统 ANSI 代码页无法编码而崩溃的问题，非控制台输出现统一使用 UTF-8。
+- 修复直接移动文件时仍进行媒体信息检查的问题。
+- 修复文档中 FFmpeg 的拼写错误。
 
----
+### 移除
 
-## [0.28.2] - 2026-10-15
+- 移除 `suffix` 和 `output_format` 配置项，用户需通过 `ffmpeg_cmd` 中的 `{output}` 占位符自行构造完整输出文件名。
+- 移除 Docker Compose 中的 `restart: unless-stopped`，容器不再默认自动重启。
 
 ### 破坏性变更
 
-- 合并 `move` 和 `whitelist_move` 为 `move` 模式，合并 `copy` 和 `whitelist_copy` 为 `copy` 模式。`whitelist_move`/`whitelist_copy` 不再支持，工作方式现统一为原 whitelist 系列的行为。
-- 配置项 `keep_rules` 重命名为 `exclude_rules`，`whitelist_rules` 重命名为 `include_rules`。
-- 删去 `preferred_rule` 配置项。规则引擎现采用顺序流水线：`include_rules` → `exclude_rules` → `delete_rules` → TRANSFER，命中即停止，不再有并行检查和冲突消解。
-- `include_rules` 为选填：未配置时所有文件均视为“已纳入”（等价于旧 `move`/`copy` 的默认行为）；配置后仅匹配的文件被处理（等价于旧 whitelist 模式）。
-- 配置项 `run_immediately` 被 `first_run_delay` 取代：`-1` 表示等待至下个调度点（默认），`0` 表示立即执行，正数表示延迟指定秒数后执行首次任务。
+配置文件结构发生重大变化，v2.x 的配置文件无法直接使用。
 
-### 修复
+### 迁移指南（v2.x -> v3.0.0）
 
-- `keep_rules` 和 `delete_rules` 在 rotate 模式下对目录不生效的问题，以及同源的逻辑缺陷。
-- 修正 README 与 docker-compose.yml 中错误的镜像地址与克隆地址，统一为 `smartarchiver`。
+| 旧配置键（v2.x） | 新配置键（v3.0.0） | 说明 |
+|---|---|---|
+| `[[tasks]].monitor_dir` | `[[tasks]].source_dir` | 重命名 |
+| `[[tasks]].output_dir` | `[[tasks]].dest_dir` | 重命名 |
+| `[[tasks]].processed_dir` | `[[tasks]].backup_dir` | 重命名；当 `remove_source = true` 时可不填 |
+| `[[tasks]].scan_interval` | `[global].scan_interval` | 移至全局配置 |
+| `[[tasks]].input_formats` | `[tasks.filter].input_formats` | 移入 filter 子表 |
+| `[[tasks]].file_mtime` | `[tasks.filter].file_mtime` | 移入 filter 子表 |
+| `[[tasks]].suffix` | *(已移除)* | 请在 `ffmpeg_cmd` 的 `{output}` 占位符中直接拼接 |
+| `[[tasks]].output_format` | *(已移除)* | 请在 `ffmpeg_cmd` 的 `{output}` 占位符中直接拼接 |
+| `{output}` 占位符行为 | `{output}` 占位符行为 | 旧版解析为完整路径（含扩展名）；新版解析为基础路径（不含扩展名），需自行追加后缀 |
+| `config/config.toml.example` | `config/config.example.toml` | 示例文件重命名 |
+| Docker 挂载 `./input`/`./output`/`./processed` | `./source`/`./dest`/`./backup` | 挂载路径重命名 |
+
+迁移步骤：
+1. 备份旧配置文件。
+2. 参考 `config/config.example.toml` 创建新的 `config/config.toml`。
+3. 将旧配置值逐一映射到新键。
+4. 将 `{output}` 的用法从 `"{output}"` 改为 `"{output}-encoded.mp4"`（根据需求调整后缀）。
+5. 如果使用 Docker，更新 `docker-compose.yml` 中的卷挂载路径。
+
+---
+
+## [2.0.2] - 2026-03-24
+
+### 新增
+
+- 运行时每日日志轮转：程序运行期间跨天时自动切换到新的日志文件。
+- 运行时自动清理旧日志：跨天轮转时自动删除超过 `max_log_files` 数量的旧日志文件。此前清理仅在启动时执行。
 
 ### 变更
 
-- `conflict_policy` 配置项现为选填，默认值为 `"skip"`（跳过已存在的目标文件）。
-- 非 `sync` 模式下允许省略 `dest`（目标目录），未配置时文件传输操作自动跳过。
-- `sync` 模式现强制要求 `dest` 字段必填。
-- 统一各处 SKIP 行为文案为“跳过”。
-- 运行环境要求由 Python 3.11+ 提升至 Python 3.14+。
+- `.dockerignore` 新增排除 `.github` 目录，减少 Docker 构建上下文大小。
 
 ---
 
-## [0.24.2] - 2026-06-28
+## [2.0.1] - 2026-03-23
 
-### 修复
-
-- 日志文件名前缀丢失的问题。
+无用户可感知的变更，仅包含代码风格调整和 `.dockerignore` 文件新增。
 
 ---
 
-## [0.24.0] - 2026-06-26
+## [2.0.0] - 2026-03-19
 
 ### 新增
 
-- 支持配置文件热重载：在定时（cron/interval）运行模式下，修改配置文件后无需重启服务即可自动生效。
-- `log_dir` 配置项现为可选，未设置时默认使用 `./logs` 目录。
-
-### 修复
-
-- 修复部分任务模式未校验 `source` 字段的问题，避免无效任务静默跳过。
+- FFmpeg 备用命令支持：当 FFmpeg 命令连续失败达到 `fallback_count` 次后，自动切换到 `ffmpeg_cmd_fallback` 执行。可用于主命令失败时降级为更兼容的编码参数。
 
 ### 变更
 
-- 删除空目录与清理旧备份的日志级别从 `debug` 提升至 `info`，使操作记录在默认日志级别下即可见。
-- 日志中的 “CRUCIAL” 信息改为中文 “致命错误”，提升可读性。
-
----
-
-## [0.23.0] - 2026-06-15
-
-- 初次发布 Release
-
----
-
-## 0.22.0 - 2026-06-10
-
-### 新增
-
-- 新增完整单元测试套件与 CI 测试工作流。
-
----
-
-## 0.21.1 - 2026-06-08
+- 配置文件和示例模板从项目根目录移至 `config/` 子目录。
+- Docker Compose 挂载方式从单文件绑定改为整个 `config/` 目录挂载。
+- 配置键 `max_retries` 重命名为 `failure_count`，功能不变。
+- 示例配置中将第二个任务的 `processed_dir` 从 `./done2` 修正为 `./processed2`。
 
 ### 修复
 
-- rsync 备份目录路径格式错误的问题。
-
----
-
-## 0.21.0 - 2026-06-08
-
-### 新增
-
-- 新增 SSH 服务器 Docker 镜像及其发布流程。
-
----
-
-## 0.20.0 - 2026-06-08
-
-### 新增
-
-- 新增 SSH 远端同步支持。
-
----
-
-## 0.19.0 - 2026-06-08
-
-### 新增
-
-- 新增同步工具选择配置，自动适配平台（Linux 使用 rsync，Windows 使用 rclone）。
-
----
-
-## 0.18.0 - 2026-06-07
-
-### 新增
-
-- HTTP 服务器支持并发控制与请求排队。
-
----
-
-## 0.17.0 - 2026-06-04
-
-### 新增
-
-- 新增目录列表与文件状态查询接口。
-
----
-
-## 0.16.0 - 2026-06-04
-
-### 新增
-
-- 每个远程支持独立的超时配置。
-
-### 变更
-
-- HTTP 客户端切换到 requests 库。
-
----
-
-## 0.15.0 - 2026-06-02
-
-### 新增
-
-- 新增远程归档支持与服务器模式。
-
----
-
-## 0.14.0 - 2026-05-13
-
-### 新增
-
-- 新增 `run_immediately` 调度配置项，支持任务启动后立即执行一次。
-
----
-
-## 0.13.0 - 2026-04-13
-
-### 变更
-
-- 文件传输引入懒加载，确认有文件需要传输后才检查目标目录。
-
----
-
-## 0.12.0 - 2026-04-09
-
-### 新增
-
-- rotate 模式支持分组细粒度轮转规则。
-
----
-
-## 0.11.0 - 2026-04-06
-
-### 新增
-
-- rotate 模式支持直接删除：轮转目标路径设为 `-1` 时直接删除旧文件而不转存备份。
-
----
-
-## 0.10.0 - 2026-04-05
+- 移除了 FFmpeg 执行前冗余的目录创建操作，避免失败时产生空目录。
+- `.gitignore` 新增 `logs/` 目录，防止日志文件被误提交。
 
 ### 破坏性变更
 
-- 统一各任务的规则配置结构。
-- 配置项 `min_age_minutes` 重命名为 `mtime_threshold_minutes`。
-- 大小阈值支持 `-1` 作为全匹配标志。
+配置文件路径和键名发生变更，v1.x 的配置文件需要调整。
+
+### 迁移指南（v1.x -> v2.0.0）
+
+1. 在项目根目录创建 `config/` 文件夹。
+2. 将原有的 `config.toml` 移动至 `config/config.toml`。
+3. 将配置中的 `max_retries` 重命名为 `failure_count`。
+4. 如果使用 Docker，确保 `docker-compose.yml` 中挂载的是 `./config:/app/config` 而非单文件。
+5. （可选）添加 `fallback_count` 和 `ffmpeg_cmd_fallback` 以启用备用命令功能。
 
 ---
 
-## 0.9.0 - 2026-04-02
+## [1.0.1] - 2026-03-19
 
 ### 新增
 
-- 规则支持按文件大小阈值过滤。
-
----
-
-## 0.8.0 - 2026-04-02
-
-### 新增
-
-- 新增 rotate 轮转模式，支持按大小和数量轮转文件。
-
----
-
-## 0.7.1 - 2026-03-30
+- 转码成功时日志中输出实际耗时信息。
 
 ### 变更
 
-- 文件过滤策略支持惰性求值，提升匹配性能。
+- 错误消息的详细信息现在换行显示，提升多行错误输出（如 FFmpeg 错误日志）的可读性。
+
+### 修复
+
+- 修复转码期间目标目录被外部删除后，移动源文件时程序崩溃的问题。现在会自动重建缺失的目录。
 
 ---
 
-## 0.7.0 - 2026-03-29
+## [1.0.0] - 2026-03-17
 
-### 新增
+- 首次发布 Realease。
 
-- 新增白名单模式。
-- 新增规则冲突处理策略配置。
-
----
-
-## 0.6.0 - 2026-03-28
-
-### 新增
-
-- 过滤规则支持目录与文件名模式匹配。
-
----
-
-## 0.5.0 - 2026-03-28
-
-### 新增
-
-- 新增 sync 同步模式，通过外部 rsync 工具完成同步。
-
----
-
-## 0.4.0 - 2026-03-24
-
-### 新增
-
-- 日志支持按天滚动，并自动清理过期日志文件。
-- 新增必填配置项检查。
-
----
-
-## 0.3.0 - 2026-03-23
-
-### 新增
-
-- 新增 copy 复制模式。
-
----
-
-## 0.2.0 - 2026-03-23
-
-### 新增
-
-- 新增定时执行功能，支持 cron 与 interval 两种模式。
-
----
-
-## 0.1.0 - 2026-03-23
-
-- 项目初版：move 模式归档、规则过滤、日志与执行历史。
-
----
-
-[0.39.2]: https://github.com/HexStan/SmartArchiver/releases/tag/v0.39.2
-[0.29.3]: https://github.com/HexStan/SmartArchiver/releases/tag/v0.29.3
-[0.28.2]: https://github.com/HexStan/SmartArchiver/releases/tag/v0.28.2
-[0.24.2]: https://github.com/HexStan/SmartArchiver/releases/tag/v0.24.2
-[0.24.0]: https://github.com/HexStan/SmartArchiver/releases/tag/v0.24.0
-[0.23.0]: https://github.com/HexStan/SmartArchiver/releases/tag/v0.23.0
+[4.0.0]: https://github.com/HexStan/MediaConveyor/releases/tag/v4.0.0
+[3.0.0]: https://github.com/HexStan/MediaConveyor/releases/tag/v3.0.0
+[2.0.2]: https://github.com/HexStan/MediaConveyor/releases/tag/v2.0.2
+[2.0.1]: https://github.com/HexStan/MediaConveyor/releases/tag/v2.0.1
+[2.0.0]: https://github.com/HexStan/MediaConveyor/releases/tag/v2.0.0
+[1.0.1]: https://github.com/HexStan/MediaConveyor/releases/tag/v1.0.1
+[1.0.0]: https://github.com/HexStan/MediaConveyor/releases/tag/v1.0.0

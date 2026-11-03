@@ -37,7 +37,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _entry_name():
-    """打包入口名：Windows 为 SmartArchiver.exe，其余平台为裸二进制。"""
+    """打包入口名：Windows 为 MediaConveyor.exe，其余平台为裸二进制。"""
     return exe_name("MediaConveyor")
 
 
