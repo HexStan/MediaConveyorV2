@@ -79,8 +79,9 @@ def ensure_bundled_ffmpeg_on_path() -> bool:
 
     - 仅冻结形态生效（源码运行沿用系统 PATH 中的安装）；
     - 幂等：目录已位于 PATH 首位时不再重复注入；
-    - 前置而非改写命令模板：用户模板中的裸 ffmpeg 与探测代码中的
-      ffprobe 因此都解析到内置版本，模板写绝对路径时仍用自装版本。
+    - 前置而非注入绝对路径：ffmpeg 命令由 media 层以固定名注入
+      （src/core/media/ffmpeg.py 的 FFMPEG_BIN），探测代码的 ffprobe
+      亦按裸名调用，二者因此都解析到内置版本。
     """
     ffmpeg_dir = bundled_ffmpeg_dir()
     if ffmpeg_dir is None:

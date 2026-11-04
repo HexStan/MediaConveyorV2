@@ -186,12 +186,13 @@ class TaskConfig(BaseModel):
     dest_dir: Annotated[str, StringConstraints(min_length=1)]
     filter: FilterConfig = Field(default_factory=FilterConfig)
 
-    # FFmpeg 命令模板（{input}/{output} 占位符），多行书写合法
+    # FFmpeg 参数模板（{input}/{output} 占位符；ffmpeg 可执行文件与预置参数
+    # 由程序注入），多行书写合法
     ffmpeg_cmd: Annotated[str, StringConstraints(min_length=1)]
     # 输出文件名模板（{basename} = 源文件名不含扩展名），主/备命令共用；
     # {output} 的值即本模板的渲染结果拼 dest 子目录而成
     output_filename: Annotated[str, StringConstraints(min_length=1)]
-    # 主命令连续失败 fallback_count 次后启用的备用命令模板
+    # 主命令连续失败 fallback_count 次后启用的备用参数模板
     ffmpeg_cmd_fallback: str = ""
     fallback_count: CountValue = Field(default=0, ge=0)
     # 单个文件失败次数上限：达到后永久跳过（成功一次即清零）

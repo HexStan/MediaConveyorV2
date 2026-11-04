@@ -1,9 +1,12 @@
-"""FFmpeg 命令执行：模板填充、子进程托管、进度流式输出与超时控制。
+"""FFmpeg 命令执行：命令组装、子进程托管、进度流式输出与超时控制。
 
-模板填充分两步：output_filename 模板（仅 {basename}）先渲染出输出
-文件名，与 dest 子目录结构拼成 {output} 的值；命令模板再以
-{input}/{output} 填充。占位符的值由本模块按运行平台自动加引号，
-模板中无需手写引号；支持项之外的花括号占位符在填充期显式报错。
+命令组装分两步：output_filename 模板（仅 {basename}）先渲染出输出
+文件名，与 dest 子目录结构拼成 {output} 的值；参数模板再以
+{input}/{output} 填充。完整命令由三部分拼成：ffmpeg 可执行文件
+（经 PATH 解析，冻结形态解析到内置版本）→ 程序预置参数
+（FFMPEG_PRESET_ARGS）→ 用户参数模板。占位符的值由本模块按运行
+平台自动加引号，模板中无需手写引号；支持项之外的花括号占位符在
+填充期显式报错。
 
 子进程登记到生命周期协调器（register_process）：stop --fast 到达时
 整树终止，不留孤儿 ffmpeg；停止指令在输出流的轮询间隙被消费，中止
@@ -36,6 +39,18 @@ _POLL_INTERVAL = 0.2
 # 失败时从错误输出尾部截取的行数（ffmpeg 的报错在输出末尾）
 _ERROR_TAIL_LINES = 20
 
+# 程序注入的 ffmpeg 可执行文件：经 shell 的 PATH 解析；冻结形态由
+# paths.ensure_bundled_ffmpeg_on_path 把内置目录前置到 PATH，命令解析到
+# 内置版本。二进制不进用户模板：模板只填 FFmpeg 参数。
+FFMPEG_BIN = "ffmpeg"
+
+# 程序预置参数：拼在用户参数模板之前，后续新增程序侧命令行注入项只改此处。
+# - -y：输出文件已存在时直接覆盖（part 文件机制下正常不会冲突，防极端
+#   情形下 ffmpeg 交互式询问挂起进程）；
+# - -nostdin：禁用 stdin（ffmpeg 默认读 stdin，前台运行时按键 q 会误停
+#   正在进行的转码）。
+FFMPEG_PRESET_ARGS: tuple[str, ...] = ("-y", "-nostdin")
+
 
 class TemplateFormatError(ValueError):
     """模板填充失败：命令模板含有 {input}/{output} 之外、output_filename
@@ -60,8 +75,10 @@ def _shell_quote(value: str) -> str:
 
 
 def build_command(template: str, filepath: str, output_path: str) -> str:
-    """填充命令模板并合并为单行。
+    """填充 FFmpeg 参数模板并与程序注入项组装为单行完整命令。
 
+    - 组装顺序：FFMPEG_BIN → FFMPEG_PRESET_ARGS → 用户参数模板，
+      {output} 的值因此保持在命令行末尾；
     - ``{input}`` → 源文件完整路径；``{output}`` → 输出文件完整路径
       （文件名由任务的 output_filename 模板渲染，子目录结构随源文件）；
     - 两个占位符的值由程序按运行平台自动加引号，模板中无需（也不应）
@@ -76,7 +93,8 @@ def build_command(template: str, filepath: str, output_path: str) -> str:
         raise TemplateFormatError(
             f"命令模板含有不受支持的占位符: {e}（仅支持 {{input}} 与 {{output}}）"
         ) from e
-    return raw.replace("\n", " ").replace("\r", " ")
+    args = raw.replace("\n", " ").replace("\r", " ").strip()
+    return " ".join((FFMPEG_BIN, *FFMPEG_PRESET_ARGS, args))
 
 
 def render_output_filename(template: str, basename: str) -> str:
