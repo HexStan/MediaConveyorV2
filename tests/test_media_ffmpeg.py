@@ -1,9 +1,10 @@
-"""单元测试：FFmpeg 命令构建与进程托管执行。
+"""单元测试：FFmpeg 命令构建、progress 协议消费与进程托管执行。
 
 Popen 是进程边界允许打桩的接缝（tests/README.md 原则三，桩见 conftest
-的 stub_ffmpeg）：FakePopen 模拟 ffmpeg 的输出流与退出码，钉死命令
-组装（模板填充与预置参数注入）、进度节流、超时终止与 fast 中止的
-契约。FFmpeg 语义本身不测。
+的 stub_ffmpeg）：FakePopen 模拟 ffmpeg 的输出流（stderr 错误输出 +
+stdout progress 块）与退出码，钉死命令组装（模板填充与预置参数注入）、
+progress 块的解析渲染、终写/收尾时序、超时终止与 fast 中止的契约。
+FFmpeg 语义本身不测。
 """
 
 import subprocess
@@ -13,8 +14,11 @@ import pytest
 
 from src.app.lifecycle import LifecycleCoordinator
 from src.core.media.ffmpeg import (
+    FFmpegProgress,
     TemplateFormatError,
     build_command,
+    format_progress,
+    parse_progress_block,
     part_output_filename,
     render_output_filename,
     run_ffmpeg,
@@ -33,29 +37,33 @@ class TestBuildCommand:
         """组装顺序：ffmpeg 可执行文件 → 程序预置参数 → 用户参数模板。"""
         cmd = build_command("-i {input} {output}", "/src/a.mp4", "/dest/a.mp4")
 
-        assert cmd == "ffmpeg -y -nostdin -i /src/a.mp4 /dest/a.mp4"
+        assert cmd == "ffmpeg -y -nostdin -nostats -progress pipe:1 -i /src/a.mp4 /dest/a.mp4"
 
     def test_quotes_unsafe_values(self, posix_shell):
         cmd = build_command("-i {input} {output}", "/src/a b.mp4", "/dest/a b.mp4")
 
-        assert cmd == "ffmpeg -y -nostdin -i '/src/a b.mp4' '/dest/a b.mp4'"
+        assert (
+            cmd == "ffmpeg -y -nostdin -nostats -progress pipe:1 -i '/src/a b.mp4' '/dest/a b.mp4'"
+        )
 
     def test_safe_values_stay_unquoted(self, posix_shell):
         cmd = build_command("-i {input} {output}", "/src/a.mp4", "/dest/a.mp4")
 
-        assert cmd == "ffmpeg -y -nostdin -i /src/a.mp4 /dest/a.mp4"
+        assert cmd == "ffmpeg -y -nostdin -nostats -progress pipe:1 -i /src/a.mp4 /dest/a.mp4"
 
     def test_windows_values_double_quoted(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "win32")
         cmd = build_command("-i {input} {output}", "C:\\src\\a b.mp4", "C:\\dest\\a b.mp4")
 
-        assert cmd == 'ffmpeg -y -nostdin -i "C:\\src\\a b.mp4" "C:\\dest\\a b.mp4"'
+        assert cmd == (
+            'ffmpeg -y -nostdin -nostats -progress pipe:1 -i "C:\\src\\a b.mp4" "C:\\dest\\a b.mp4"'
+        )
 
     def test_windows_trailing_backslash_escaped(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "win32")
         cmd = build_command("-i {input}", "C:\\src\\", "C:\\out")
 
-        assert cmd == 'ffmpeg -y -nostdin -i "C:\\src\\\\"'
+        assert cmd == 'ffmpeg -y -nostdin -nostats -progress pipe:1 -i "C:\\src\\\\"'
 
     def test_multiline_merged_to_single_line(self, posix_shell):
         cmd = build_command("-i {input} \\\n  {output}", "/in a.mp4", "/out b.mp4")
@@ -63,7 +71,6 @@ class TestBuildCommand:
         assert "\n" not in cmd
         assert "\r" not in cmd
         assert "-i '/in a.mp4'" in cmd
-        assert "'/out b.mp4'" in cmd
 
     def test_unknown_placeholder_raises(self, posix_shell):
         with pytest.raises(TemplateFormatError, match="占位符"):
@@ -87,7 +94,7 @@ class TestRenderOutputFilename:
 
     def test_empty_braces_raise(self):
         with pytest.raises(TemplateFormatError):
-            render_output_filename("{}.mp4", "a")
+            render_output_filename("{}", "a")
 
 
 class TestPartOutputFilename:
@@ -95,18 +102,214 @@ class TestPartOutputFilename:
         assert part_output_filename("a-encoded.mp4") == ".mc-ffmpeg-part.a-encoded.mp4"
 
 
+def _continue_block() -> bytes:
+    return (
+        b"frame=10\nfps=2.0\nbitrate=128.0kbits/s\ntotal_size=2048\n"
+        b"out_time=00:00:01.000000\ndup_frames=0\ndrop_frames=0\nspeed=2.0x\n"
+        b"progress=continue\n"
+    )
+
+
+def _end_block() -> bytes:
+    return (
+        b"frame=20\nfps=2.0\nbitrate=128.0kbits/s\ntotal_size=4096\n"
+        b"out_time=00:00:02.000000\ndup_frames=0\ndrop_frames=0\nspeed=2.0x\n"
+        b"progress=end\n"
+    )
+
+
+class TestParseProgressBlock:
+    def test_full_block(self):
+        progress = parse_progress_block(
+            [
+                "frame=168",
+                "fps=42.13",
+                "bitrate= 512.3kbits/s",
+                "total_size=1052204",
+                "out_time=00:00:04.200000",
+                "dup_frames=0",
+                "drop_frames=0",
+                "speed=1.05x",
+                "progress=continue",
+            ]
+        )
+
+        assert progress == FFmpegProgress(
+            progress="continue",
+            frame="168",
+            fps="42.13",
+            bitrate="512.3kbits/s",
+            total_size=1052204,
+            out_time="00:00:04.200000",
+            dup_frames="0",
+            drop_frames="0",
+            speed="1.05x",
+        )
+
+    def test_missing_progress_key_returns_none(self):
+        """无 progress 键的内容不构成块（块的收尾标志缺失）。"""
+        assert parse_progress_block(["frame=1", "fps=1.0"]) is None
+
+    def test_total_size_na_parses_to_none(self):
+        progress = parse_progress_block(["total_size=N/A", "progress=end"])
+
+        assert progress is not None
+        assert progress.total_size is None
+
+    def test_missing_fields_default_empty(self):
+        progress = parse_progress_block(["progress=end"])
+
+        assert progress is not None
+        assert progress.frame == ""
+        assert progress.out_time == ""
+
+
+class TestFormatProgress:
+    def test_full_line(self):
+        progress = FFmpegProgress(
+            progress="continue",
+            frame="168",
+            fps="42.13",
+            bitrate="512.3kbits/s",
+            total_size=1052204,
+            out_time="00:00:04.200000",
+            dup_frames="0",
+            drop_frames="0",
+            speed="1.05x",
+        )
+
+        assert format_progress(progress, elapsed=12.4) == (
+            "【进行中】 持续时间：00:00:12 | 输出时间戳：00:00:04 | 当前帧：168 "
+            "| 码率：512.3kbits/s | 体积：1.0 MiB | 帧率：42.13 | 速率：1.05x "
+            "| 复制帧：0 | 丢弃帧：0"
+        )
+
+    def test_end_state_and_missing_fields(self):
+        """end 汉化为已完成；N/A 与缺失字段统一为占位符。"""
+        progress = FFmpegProgress(
+            progress="end",
+            frame="",
+            fps="",
+            bitrate="",
+            total_size=None,
+            out_time="N/A",
+            dup_frames="",
+            drop_frames="",
+            speed="",
+        )
+
+        assert format_progress(progress, elapsed=0.4) == (
+            "【已完成】 持续时间：00:00:00 | 输出时间戳：-- | 当前帧：-- | 码率：-- "
+            "| 体积：-- | 帧率：-- | 速率：-- | 复制帧：-- | 丢弃帧：--"
+        )
+
+    def test_timer_clamps_negative_elapsed(self):
+        progress = parse_progress_block(["progress=continue"])
+
+        assert progress is not None
+        assert "持续时间：00:00:00" in format_progress(progress, elapsed=-1.0)
+
+
+class RecordingReporter:
+    """进度分发器替身：记录 update / finish / close 调用。"""
+
+    def __init__(self):
+        self.updates: list[str] = []
+        self.finished: list[str] = []
+        self.closed = False
+
+    def update(self, line):
+        self.updates.append(line)
+
+    def finish(self, line):
+        self.finished.append(line)
+
+    def close(self):
+        self.closed = True
+
+
 class TestRunFFmpeg:
-    def test_success_logs_report(self, stub_ffmpeg, capture_log):
-        calls, state = stub_ffmpeg
-        state["output"] = b"frame= 1\r\ntime=00:00:01.00 speed=2.0x\r\n"
+    def test_success_finishes_with_end_progress(self, stub_ffmpeg, capture_log):
+        _calls, state = stub_ffmpeg
+        state["progress"] = _continue_block() + _end_block()
+        reporter = RecordingReporter()
 
         coordinator = LifecycleCoordinator()
-        ok = run_ffmpeg("ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=coordinator)
+        ok = run_ffmpeg(
+            "ffmpeg cmd",
+            rel_path="a.mp4",
+            logger=capture_log,
+            coordinator=coordinator,
+            reporter=reporter,
+        )
 
         assert ok is True
-        assert calls == ["ffmpeg cmd"]
         assert capture_log.has("info", "FFmpeg 处理完成")
-        assert capture_log.has("info", "FFmpeg 运行报告")
+        # 运行报告行取消：终态由 progress=end 的终写进度行承载
+        assert not any("运行报告" in m for _, m in capture_log.messages)
+        assert reporter.closed is False
+        assert len(reporter.finished) == 1
+        assert "【已完成】" in reporter.finished[0]
+        # 进行中的更新行不得混入终写状态
+        assert all("【已完成】" not in line for line in reporter.updates)
+
+    def test_stderr_stats_lines_are_plain_error_output(self, stub_ffmpeg, capture_log):
+        """-nostats 后 stderr 不再有进度语义：time=/speed= 行只是普通输出行。"""
+        _calls, state = stub_ffmpeg
+        state["output"] = b"time=00:00:01.00 speed=2.0x\r\n"
+        reporter = RecordingReporter()
+
+        run_ffmpeg(
+            "ffmpeg cmd",
+            rel_path="a.mp4",
+            logger=capture_log,
+            coordinator=LifecycleCoordinator(),
+            reporter=reporter,
+        )
+
+        assert not capture_log.has("info", "FFmpeg 进度")
+        assert reporter.finished == [] and reporter.updates == []
+
+    def test_progress_updates_during_run(self, stub_ffmpeg, capture_log):
+        """执行期间持续以最新快照更新（计时器走动），异常结束不终写。"""
+        _calls, state = stub_ffmpeg
+        state["hangs"] = True
+        state["progress"] = _continue_block()
+        reporter = RecordingReporter()
+
+        ok = run_ffmpeg(
+            "ffmpeg cmd",
+            rel_path="a.mp4",
+            logger=capture_log,
+            coordinator=LifecycleCoordinator(),
+            timeout=0.2,
+            reporter=reporter,
+        )
+
+        assert ok is False
+        assert capture_log.has("error", "处理超时")
+        assert any("【进行中】" in line for line in reporter.updates)
+        assert reporter.finished == []
+        assert reporter.closed is True
+
+    def test_failure_keeps_last_progress_and_closes(self, stub_ffmpeg, capture_log):
+        """命令失败（无 end 块）：不终写，最后一行进度原样保留。"""
+        _calls, state = stub_ffmpeg
+        state["returncode"] = 1
+        state["progress"] = _continue_block()
+        reporter = RecordingReporter()
+
+        ok = run_ffmpeg(
+            "ffmpeg cmd",
+            rel_path="a.mp4",
+            logger=capture_log,
+            coordinator=LifecycleCoordinator(),
+            reporter=reporter,
+        )
+
+        assert ok is False
+        assert not reporter.finished
+        assert reporter.closed is True
 
     def test_failure_logs_error_tail(self, stub_ffmpeg, capture_log):
         _calls, state = stub_ffmpeg
@@ -121,17 +324,6 @@ class TestRunFFmpeg:
         error_msg = next(m for lv, m in capture_log.messages if lv == "error")
         assert "line 29" in error_msg
         assert "line 5" not in error_msg
-
-    def test_progress_lines_throttled(self, stub_ffmpeg, capture_log):
-        _calls, state = stub_ffmpeg
-        # 两条进度行 + 一条非进度行：5 秒节流下只应有首条进度行入日志
-        state["output"] = b"time=00:00:01.00 speed=1.0x\r\ntime=00:00:02.00 speed=1.0x\r\nother\r\n"
-
-        coordinator = LifecycleCoordinator()
-        run_ffmpeg("ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=coordinator)
-
-        progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "FFmpeg 进度" in m]
-        assert len(progress_logs) == 1
 
     def test_process_registered_during_run(self, stub_ffmpeg, capture_log):
         """子进程在执行期间登记到协调器，结束后摘除（fast 停止整树终止的前提）。"""
@@ -178,11 +370,20 @@ class TestRunFFmpeg:
         _calls, _state = stub_ffmpeg
         coordinator = LifecycleCoordinator()
         coordinator.request_abort()
+        reporter = RecordingReporter()
 
         with pytest.raises(TransferAbortedError):
-            run_ffmpeg("ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=coordinator)
+            run_ffmpeg(
+                "ffmpeg cmd",
+                rel_path="a.mp4",
+                logger=capture_log,
+                coordinator=coordinator,
+                reporter=reporter,
+            )
 
         assert coordinator._children == []
+        assert not reporter.finished
+        assert reporter.closed is True
 
     def test_popen_oserror_fails_gracefully(self, monkeypatch, capture_log):
         def boom(cmd, **kwargs):

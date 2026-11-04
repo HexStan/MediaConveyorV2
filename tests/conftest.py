@@ -48,6 +48,9 @@ class CaptureLogger:
     def critical(self, msg, **kwargs):
         self._log("critical", msg, **kwargs)
 
+    def progress_reporter(self):
+        """进度分发器替身：测试未显式注入时 run_ffmpeg 跳过进度输出。"""
+
     def has(self, level, substring):
         """是否存在包含指定子串的某级别日志。"""
         return any(lv == level and substring in m for lv, m in self.messages)
@@ -81,10 +84,12 @@ def _reset_handler_class_state():
 
 
 class FakePopen:
-    """模拟 ffmpeg 子进程：stderr 按 chunk 输出，退出码可配置。"""
+    """模拟 ffmpeg 子进程：stderr（错误输出）与 stdout（progress 块）按
+    chunk 输出，退出码可配置。"""
 
-    def __init__(self, returncode=0, output=b"", hangs=False):
+    def __init__(self, returncode=0, output=b"", progress=b"", hangs=False):
         self.stderr = io.BytesIO(output)
+        self.stdout = io.BytesIO(progress)
         self.returncode = None if hangs else returncode
         self.pid = 4321
         self._hangs = hangs
@@ -106,14 +111,22 @@ def stub_ffmpeg(monkeypatch):
     """进程边界打桩（tests/README.md 原则三）：记录传给 ffmpeg 的命令行。
 
     - ``calls``：收到的完整命令行列表；
-    - ``state``：可配置的返回行为（returncode / output / hangs / on_start，
-      on_start 在子进程"启动"时调用，可用来模拟 ffmpeg 写出半成品文件）。
+    - ``state``：可配置的返回行为（returncode / output / progress / hangs /
+      on_start，on_start 在子进程"启动"时调用，可用来模拟 ffmpeg 写出
+      半成品文件）。``output`` 为 stderr 的错误输出，``progress`` 为
+      stdout 的 progress 协议块。
     - 成功退出（returncode == 0 且未配置 on_start）时模拟 ffmpeg 的产出：
       向命令行末尾的 part 路径（``{output}`` 的填充值）写出内容，处理器
       随后的改名善后才有真实对象可操作。
     """
     calls: list[str] = []
-    state = {"returncode": 0, "output": b"", "on_start": None, "hangs": False}
+    state = {
+        "returncode": 0,
+        "output": b"",
+        "progress": b"",
+        "on_start": None,
+        "hangs": False,
+    }
 
     def fake_popen(cmd, **kwargs):
         calls.append(cmd)
@@ -129,6 +142,7 @@ def stub_ffmpeg(monkeypatch):
         return FakePopen(
             returncode=state["returncode"],
             output=state["output"],
+            progress=state["progress"],
             hangs=state["hangs"],
         )
 
