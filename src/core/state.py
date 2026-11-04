@@ -7,7 +7,8 @@ dest_dir) 归一化而来——多个任务监听重叠目录时状态互不串�
 
 记录的语义——记录的生命周期即义务的生命周期，只在义务存续期间存在：
 - 失败计数是重试义务：处理失败后必须重试，failure_count 达到任务级
-  failure_count 后转为永久跳过；ffmpeg_failure_count 专计主命令失败，
+  failure_count 后转为永久跳过（0 表示永不因失败跳过）；
+  ffmpeg_failure_count 专计主命令失败，
   达到 fallback_count 后切换备用命令；成功一次即双计数清零；
 - 成功记录（success_time 非 NULL，附带成功时的源文件 size/mtime）仅当
   源文件仍留在源树时存在：或承载待删除义务（remove_source 模式，到期

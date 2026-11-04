@@ -3,7 +3,8 @@
 单轮执行的完整流水线（对齐 v1 MediaConveyor 的 scanner + processor 组合）：
 
 1. 扫描：os.walk 确定性排序遍历 → 文件名分类流水线（classify）→
-   状态判定（已成功且源文件未变化则跳过；失败达上限永久跳过）→
+   状态判定（已成功且源文件未变化则跳过；失败达上限永久跳过，
+   failure_count = 0 表示永不因失败跳过）→
    修改时间冷却 → 媒体属性过滤（仅在配置了需要 ffprobe 的条件时探测）；
 2. 待删除清理：remove_source 模式下到期的源文件（source_expired_minutes
    = 0 的立即删除模式，记录存在即已到期；删除成功才清记录，失败下轮重试）；
@@ -14,7 +15,8 @@
    存续时保留 → 清理空目录。
 
 单文件失败不中断本轮任务（状态库计数兜底，达到 failure_count 后永久
-跳过）；命令模板错误属配置级错误，中止本轮并给出明确报错。
+跳过，0 表示永不因失败跳过）；命令模板错误属配置级错误，中止本轮并
+给出明确报错。
 """
 
 import contextlib
@@ -168,8 +170,9 @@ class FFmpegTaskHandler(BaseTaskHandler):
                     ctx.logger.info(f"源文件已变化，重新处理: {rel_path}")
                     state.delete_record(self._key, fkey)
 
+                # failure_count = 0 表示永不因失败跳过，失败文件每轮重试
                 failures = state.get_failure_count(self._key, fkey)
-                if failures >= config.failure_count:
+                if config.failure_count > 0 and failures >= config.failure_count:
                     ctx.logger.debug(
                         f"跳过 {rel_path}，原因: 失败次数 ({failures}) 已达到上限 ({config.failure_count})"
                     )

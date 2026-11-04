@@ -195,7 +195,8 @@ class TaskConfig(BaseModel):
     # 主命令连续失败 fallback_count 次后启用的备用参数模板
     ffmpeg_cmd_fallback: str = ""
     fallback_count: CountValue = Field(default=0, ge=0)
-    # 单个文件失败次数上限：达到后永久跳过（成功一次即清零）
+    # 单个文件失败次数上限：达到后永久跳过（成功一次即清零）；
+    # 0 表示永不因失败跳过，失败文件每轮重试
     failure_count: CountValue = Field(default=3, ge=0)
     # FFmpeg 单文件处理超时（秒），0 表示不限
     ffmpeg_timeout: SecondsValue = Field(default=0, ge=0)

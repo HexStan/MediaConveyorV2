@@ -348,6 +348,23 @@ class TestFailures:
         assert calls == []
         assert handler.stats.skipped == 1
 
+    def test_zero_failure_count_never_skips(self, run_task, tmp_path, stub_ffmpeg):
+        """failure_count = 0 表示永不因失败跳过：失败文件每轮重试，计数持续累积。"""
+        calls, fstate = stub_ffmpeg
+        fstate["returncode"] = 1
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", failure_count=0)
+        filepath = os.path.join(task["source_dir"], "a.mp4")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+
+        first = run_task(task, now=NOW)
+        second = run_task(task, now=NOW)
+
+        assert len(calls) == 2
+        assert first.stats.failed == 1
+        assert second.stats.failed == 1
+        assert second.stats.skipped == 0
+        assert state().get_failure_count(key_of(task), file_key(filepath)) == 2
+
     def test_partial_output_cleaned_on_failure(self, run_task, tmp_path, stub_ffmpeg):
         _calls, fstate = stub_ffmpeg
         fstate["returncode"] = 1
