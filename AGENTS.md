@@ -40,10 +40,6 @@ uv run --group build python scripts/build_executable.py                 # 构建
 uv run python scripts/smoke_test.py "dist/MediaConveyor-*.zip"          # 对发行 zip 做冒烟检查（包结构 + 入口与内置 FFmpeg 可运行）
 ```
 
-- 运行前需 `cp config/config.example.toml config/config.toml`；`config.toml`、`data/`、`logs/` 已 gitignore，只提交 `config/*.example.toml`。
-- FFmpeg 必须安装并配置在 PATH 中（`ffmpeg` / `ffprobe`）；测试完全离线，subprocess 在边界打桩。
-- 验证手段 = pytest + ruff check + pyrefly check；formatter 用 Ruff Format（`pyproject.toml` 的 `[tool.ruff.format]`）。
-
 ## 类型检查（权威配置：pyproject.toml 的 [tool.pyrefly]）
 
 - 详见 `pyproject.toml` 中 `[tool.pyrefly]` 的注释。
@@ -80,7 +76,3 @@ uv run python scripts/smoke_test.py "dist/MediaConveyor-*.zip"          # 对发
 - 仅当维护者主动要求时执行对应流程，不得自行提交、推送或发布：
   - 要求提交变更 → 执行 RELEASE-GUIDE.md 的提交流程（前置：仓库存在未提交的变更）。
   - 要求发布版本 → 执行 RELEASE-GUIDE.md 的发布流程（前置：`pyproject.toml` 的 version 字段存在未提交的变更）。
-
-## 约定
-
-- README.md 是 `config.toml` 的中文配置向导；新增配置项时，需同时更新 README.md 和 `config/config.example.toml`。
