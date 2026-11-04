@@ -1,8 +1,7 @@
 services:
   media-conveyor:
-    image: ghcr.io/hexstan/mediaconveyor:latest
-    # build: .
-    container_name: media-conveyor
+    image: ghcr.io/hexstan/mediaconveyorv2:latest
+    container_name: media-conveyor-v2
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
@@ -13,10 +12,11 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
 
-      # 需要监听和处理的目录
+      # 媒体生命周期目录
       - ./source:/app/source
       - ./dest:/app/dest
       - ./backup:/app/backup
+      - ./failed:/app/failed
 
     # 启用 Intel/AMD GPU 支持 (VAAPI/QSV)
     devices:
