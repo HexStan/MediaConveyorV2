@@ -86,7 +86,8 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
 2. **打包布局与入口启动**：冻结形态下应用根目录 = 可执行文件所在目录
    （`src/app/paths.py`），打包缺失模块、入口崩溃等只有真实产物能暴露；
 3. **内置 FFmpeg 真实转码**：先以包内 `_internal/ffmpeg/ffmpeg` 合成测试视频
-   （lavfi 源），再经命令模板中的裸 `ffmpeg` 转码——PATH 前置
+   （lavfi 源），再经程序注入的 `ffmpeg` 转码（命令组装见
+   `src/core/media/ffmpeg.py`）——PATH 前置
    （`src/app/paths.py`）与内置二进制可执行性只有真实产物能验证。
 
 约定：

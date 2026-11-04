@@ -89,7 +89,7 @@ def _ffmpeg_task_toml(src, dest, *, filter_body=""):
     return (
         f'source_dir = "{src}"\n'
         f'dest_dir = "{dest}"\n'
-        "ffmpeg_cmd = 'ffmpeg -y -i {input} {output}'\n"
+        "ffmpeg_cmd = '-i {input} {output}'\n"
         'output_filename = "{basename}.mp4"\n'
         f"{filter_block}"
     )
@@ -205,8 +205,8 @@ class TestBundledFFmpegTranscode:
     def test_real_transcode_via_bundled_ffmpeg(self, program_dir, tmp_path):
         """内置 FFmpeg 的真实转码链路：先以包内 ffmpeg 合成测试视频
         （lavfi 源，无外部依赖），再经 MediaConveyor 的命令模板转码进
-        目标目录——命令模板中的裸 ffmpeg 经 PATH 前置解析到内置版本
-        （src/app/paths.py），源文件处理后清空。"""
+        目标目录——程序注入的 ffmpeg（PATH 解析）经内置目录前置解析到
+        内置版本（src/app/paths.py），源文件处理后清空。"""
         bundled = _bundled_ffmpeg(program_dir)
         assert os.path.isfile(bundled), "发行包缺少内置 ffmpeg"
 

@@ -46,7 +46,7 @@ def ffmpeg_task(source, dest, **overrides):
     task = {
         "source_dir": str(source),
         "dest_dir": str(dest),
-        "ffmpeg_cmd": "ffmpeg -y -i {input} {output}",
+        "ffmpeg_cmd": "-i {input} {output}",
         "output_filename": "{basename}-encoded.mp4",
     }
     if filter_cfg:
@@ -84,6 +84,8 @@ class TestFFmpegTask:
         assert snapshot(task["source_dir"]) == {"a.mp4": 5}
         # 命令行包含 {input}/{output} 的填充结果（引号由程序按平台添加，
         # 引或不引均包含裸路径子串）；{output} 指向瞬态 part 文件而非最终名
+        # 程序注入项在前：ffmpeg 可执行文件与预置参数拼在用户参数模板之前
+        assert calls[0].startswith("ffmpeg -y -nostdin ")
         assert os.path.join(task["source_dir"], "a.mp4") in calls[0]
         part_output = os.path.join(task["dest_dir"], ".mc-ffmpeg-part.a-encoded.mp4")
         assert part_output in calls[0]
@@ -129,7 +131,7 @@ class TestFFmpegTask:
         self, run_task, tmp_path, stub_ffmpeg
     ):
         _calls, _state = stub_ffmpeg
-        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", ffmpeg_cmd="ffmpeg {oops}")
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", ffmpeg_cmd="{oops}")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
 
         run_task(task, now=NOW)
@@ -235,7 +237,7 @@ class TestFailures:
             tmp_path / "src",
             tmp_path / "dest",
             fallback_count=3,
-            ffmpeg_cmd_fallback="ffmpeg -fallback -i {input} {output}",
+            ffmpeg_cmd_fallback="-fallback -i {input} {output}",
         )
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
@@ -253,7 +255,7 @@ class TestFailures:
             tmp_path / "src",
             tmp_path / "dest",
             fallback_count=2,
-            ffmpeg_cmd_fallback="ffmpeg -fallback -i {input} {output}",
+            ffmpeg_cmd_fallback="-fallback -i {input} {output}",
         )
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})
@@ -272,7 +274,7 @@ class TestFailures:
             tmp_path / "src",
             tmp_path / "dest",
             fallback_count=1,
-            ffmpeg_cmd_fallback="ffmpeg -fallback -i {input} {output}",
+            ffmpeg_cmd_fallback="-fallback -i {input} {output}",
         )
         filepath = os.path.join(task["source_dir"], "a.mp4")
         make_tree(task["source_dir"], {"a.mp4": b"video"})

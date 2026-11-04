@@ -21,7 +21,7 @@ def make_task(**overrides) -> dict:
     task = {
         "source_dir": "./source",
         "dest_dir": "./dest",
-        "ffmpeg_cmd": "ffmpeg -i {input} {output}",
+        "ffmpeg_cmd": "-i {input} {output}",
         "output_filename": "{basename}.mp4",
     }
     task.update(overrides)
@@ -87,9 +87,7 @@ class TestFieldCoercion:
         assert "ffmpeg_command: 不支持的字段" in format_validation_error(exc_info.value)
 
     def test_multiline_cmd_preserved(self):
-        config = TaskConfig.model_validate(
-            make_task(ffmpeg_cmd="ffmpeg -y \\\n  -i {input} \\\n  {output}")
-        )
+        config = TaskConfig.model_validate(make_task(ffmpeg_cmd="-i {input} \\\n  {output}"))
 
         assert "\n" in config.ffmpeg_cmd
 

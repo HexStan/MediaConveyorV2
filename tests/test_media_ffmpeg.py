@@ -1,8 +1,9 @@
 """单元测试：FFmpeg 命令构建与进程托管执行。
 
 Popen 是进程边界允许打桩的接缝（tests/README.md 原则三，桩见 conftest
-的 stub_ffmpeg）：FakePopen 模拟 ffmpeg 的输出流与退出码，钉死命令模板
-填充、进度节流、超时终止与 fast 中止的契约。FFmpeg 语义本身不测。
+的 stub_ffmpeg）：FakePopen 模拟 ffmpeg 的输出流与退出码，钉死命令
+组装（模板填充与预置参数注入）、进度节流、超时终止与 fast 中止的
+契约。FFmpeg 语义本身不测。
 """
 
 import subprocess
@@ -28,30 +29,36 @@ def posix_shell(monkeypatch):
 
 
 class TestBuildCommand:
-    def test_quotes_unsafe_values(self, posix_shell):
-        cmd = build_command("ffmpeg -i {input} {output}", "/src/a b.mp4", "/dest/a b.mp4")
+    def test_preset_args_injected_before_template(self, posix_shell):
+        """组装顺序：ffmpeg 可执行文件 → 程序预置参数 → 用户参数模板。"""
+        cmd = build_command("-i {input} {output}", "/src/a.mp4", "/dest/a.mp4")
 
-        assert cmd == "ffmpeg -i '/src/a b.mp4' '/dest/a b.mp4'"
+        assert cmd == "ffmpeg -y -nostdin -i /src/a.mp4 /dest/a.mp4"
+
+    def test_quotes_unsafe_values(self, posix_shell):
+        cmd = build_command("-i {input} {output}", "/src/a b.mp4", "/dest/a b.mp4")
+
+        assert cmd == "ffmpeg -y -nostdin -i '/src/a b.mp4' '/dest/a b.mp4'"
 
     def test_safe_values_stay_unquoted(self, posix_shell):
-        cmd = build_command("ffmpeg -i {input} {output}", "/src/a.mp4", "/dest/a.mp4")
+        cmd = build_command("-i {input} {output}", "/src/a.mp4", "/dest/a.mp4")
 
-        assert cmd == "ffmpeg -i /src/a.mp4 /dest/a.mp4"
+        assert cmd == "ffmpeg -y -nostdin -i /src/a.mp4 /dest/a.mp4"
 
     def test_windows_values_double_quoted(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "win32")
-        cmd = build_command("ffmpeg -i {input} {output}", "C:\\src\\a b.mp4", "C:\\dest\\a b.mp4")
+        cmd = build_command("-i {input} {output}", "C:\\src\\a b.mp4", "C:\\dest\\a b.mp4")
 
-        assert cmd == 'ffmpeg -i "C:\\src\\a b.mp4" "C:\\dest\\a b.mp4"'
+        assert cmd == 'ffmpeg -y -nostdin -i "C:\\src\\a b.mp4" "C:\\dest\\a b.mp4"'
 
     def test_windows_trailing_backslash_escaped(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "win32")
-        cmd = build_command("ffmpeg -i {input}", "C:\\src\\", "C:\\out")
+        cmd = build_command("-i {input}", "C:\\src\\", "C:\\out")
 
-        assert cmd == 'ffmpeg -i "C:\\src\\\\"'
+        assert cmd == 'ffmpeg -y -nostdin -i "C:\\src\\\\"'
 
     def test_multiline_merged_to_single_line(self, posix_shell):
-        cmd = build_command("ffmpeg -y \\\n  -i {input} \\\n  {output}", "/in a.mp4", "/out b.mp4")
+        cmd = build_command("-i {input} \\\n  {output}", "/in a.mp4", "/out b.mp4")
 
         assert "\n" not in cmd
         assert "\r" not in cmd
@@ -60,11 +67,11 @@ class TestBuildCommand:
 
     def test_unknown_placeholder_raises(self, posix_shell):
         with pytest.raises(TemplateFormatError, match="占位符"):
-            build_command("ffmpeg {oops}", "/in", "/out")
+            build_command("{oops}", "/in", "/out")
 
     def test_empty_braces_raise(self, posix_shell):
         with pytest.raises(TemplateFormatError):
-            build_command("ffmpeg {}", "/in", "/out")
+            build_command("{}", "/in", "/out")
 
 
 class TestRenderOutputFilename:
