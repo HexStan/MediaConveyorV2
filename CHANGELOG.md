@@ -9,7 +9,7 @@
 ### 破坏性变更
 
 - 配置文件格式与 V1 完全不兼容，需按文末迁移指南改写：`[global]` 全局节取消，全局配置项上移至顶层；`scan_interval` 由 `[schedule]` 调度节取代（省略该节 = 一次性运行；新增 cron 模式）。
-- 任务新增必填项 `output_filename`（输出文件名模板）；`ffmpeg_cmd` / `ffmpeg_cmd_fallback` 的 `{output}` 改为完整输出路径，命令模板占位符（`{input}` / `{output}`）由程序按平台自动加引号，不再手写引号。
+- 任务新增必填项 `output_filename`（输出文件名模板）；`ffmpeg_cmd` / `ffmpeg_cmd_fallback` 改为纯参数模板——ffmpeg 可执行文件与预置参数（覆盖输出 `-y`、禁用 stdin `-nostdin` 等）由程序注入，模板中只填写 FFmpeg 参数；`{output}` 改为完整输出路径，占位符（`{input}` / `{output}`）由程序按平台自动加引号，不再手写引号。
 - `log_dir` 与新增的 `data_dir`（默认 `./data`）的相对路径改以程序所在目录为基准解析，不再跟随工作目录。
 - 状态库更换为 `data/` 目录下的 `state.db`（沿用 SQLite，表结构新增任务隔离键与源文件 size/mtime 快照）：旧库不迁移，首次启动视为全新状态。
 - 过滤条件字段名与 V1 保持一致；范围型条件只接受 `{ min = ..., max = ... }` 字典写法，非法值不再静默按 0 处理，改为加载期显式报错。
@@ -27,15 +27,18 @@
 - 为 Windows 平台适配了实例锁。
 - FFmpeg 输出先写入目标目录下的临时文件（`.mc-ffmpeg-part.` 前缀）：处理中断不再遗留不完整的目标文件；保留名文件被过滤流水线无条件跳过。
 - 打包版可执行文件，覆盖 Windows/macOS × AMD64/ARM64，内置 FFmpeg，无需另外安装。
+- `failure_dir` 失败隔离目录：文件失败次数达到 `failure_count` 上限后移入该目录（保持子目录结构），不再留在源目录。
 
 ### 修复
 
 - 备份目录移动失败此前会中断整个监听循环，现按单文件失败计数兜底。
+- `failure_count = 0` 时的语义偏差。现在该配置表示失败文件每轮重试，永不跳过。
 
 ### 变更
 
 - 优化了 ffprobe 的调用流程。
 - FFmpeg 进度输出经日志系统 5 秒节流记录，进入日志文件（原仅控制台单行覆盖打印）。
+- 状态记录仅在义务存续期间保留：源文件离开源树（删除 / 备份 / 直传移走）后不留记录，重新放回的同名文件从头处理。
 
 ### 迁移指南
 
@@ -75,8 +78,9 @@ interval_seconds = 60
 
 每个任务必须配置 `output_filename`（输出文件名模板）：`{basename}` 占位源文件名（不含扩展名），输出扩展名直接写在模板里，且须为纯文件名（不允许路径分隔符）。
 
-命令模板的两处配套变化：
+命令模板的三处配套变化：
 
+- 模板只写 FFmpeg 参数：ffmpeg 可执行文件与预置参数（覆盖输出 `-y`、禁用 stdin `-nostdin` 等）由程序自动注入，模板中开头的 `ffmpeg` 与 `-y` 需删除；
 - `{output}` 由「目标目录下不含扩展名的基础文件名」改为「完整输出路径」，扩展名由 `output_filename` 决定，不再在命令里拼接；
 - 占位符由程序按平台自动加引号，模板中不再手写引号（`{input}` 同理）。
 
@@ -101,8 +105,7 @@ ffmpeg -y \
 output_filename = "{basename}-encoded.mp4"
 
 ffmpeg_cmd = """
-ffmpeg -y \
-  -i {input} \
+-i {input} \
   -c:v libx264 \
   -preset fast \
   -crf 23 \
