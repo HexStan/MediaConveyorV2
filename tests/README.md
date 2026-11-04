@@ -14,7 +14,7 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
 
 | 层 | 文件 | 被测对象 | 驱动方式 |
 |----|------|---------|---------|
-| 灰盒·模式处理器 | `test_greybox_ffmpeg_task.py` | FFmpegTaskHandler（扫描/过滤/稳定性/处理/善后/延迟删除/多任务隔离） | `run_task()` 入口 + 临时目录树 + `stub_ffmpeg` 进程边界打桩 |
+| 灰盒·模式处理器 | `test_greybox_ffmpeg_task.py` | FFmpegTaskHandler（扫描/过滤/稳定性/处理/善后/状态记录生命周期/待删除清理/多任务隔离） | `run_task()` 入口 + 临时目录树 + `stub_ffmpeg` 进程边界打桩 |
 | 白盒·媒体属性探测 | `test_media_probe.py` | ffprobe 封装（JSON 解析、容错降级、首个流选取） | `subprocess.run` 进程边界打桩 |
 | 白盒·配置值解析 | `test_media_parsing.py` | 容量/时长/码率解析器（IEC 80000-13 单位语义、显式报错） | 纯函数直接调用 |
 | 白盒·文件过滤 | `test_media_filter.py` | classify 流水线、file_mtime 冷却、媒体属性匹配 | 直接调用 |
