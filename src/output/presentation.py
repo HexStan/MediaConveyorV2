@@ -74,7 +74,7 @@ def print_task_summary(stats: TaskStats, duration: float, logger: Logger) -> Non
     if stats.passthrough > 0:
         parts.append(f"直传 {stats.passthrough} 项")
     if stats.expired > 0:
-        parts.append(f"过期清理 {stats.expired} 项")
+        parts.append(f"源文件清理 {stats.expired} 项")
     if stats.skipped > 0:
         parts.append(f"因多次失败跳过 {stats.skipped} 项")
     logger.info("，".join(parts) + "。")

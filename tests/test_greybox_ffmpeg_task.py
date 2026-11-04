@@ -126,6 +126,13 @@ class TestFFmpegTask:
         assert len(calls) == 1
         assert handler.stats.passthrough == 1
         assert handler.stats.processed == 1
+        # 直传成功：源文件已移至目标目录、离开源树，不留记录
+        assert (
+            state().get_success_state(
+                key_of(task), file_key(os.path.join(task["source_dir"], "a.srt"))
+            )
+            is None
+        )
 
     def test_template_error_aborts_round_without_burning_counters(
         self, run_task, tmp_path, stub_ffmpeg
@@ -160,12 +167,46 @@ class TestDisposition:
         run_task(task, now=NOW)
 
         assert snapshot(task["source_dir"]) == {}
+        # 源文件已离开源树，删除义务了结：不留记录
         assert (
             state().get_success_state(
                 key_of(task), file_key(os.path.join(task["source_dir"], "a.mp4"))
             )
-            is not None
+            is None
         )
+
+    def test_remove_source_delete_failure_retries_next_round(
+        self, run_task, tmp_path, stub_ffmpeg, monkeypatch
+    ):
+        """立即删除失败：成功记录保留为待删除凭证，下轮自动重试删除。"""
+        import src.core.handlers.ffmpeg_task as handler_module
+
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", remove_source=True)
+        filepath = os.path.join(task["source_dir"], "a.mp4")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+
+        def broken_delete(path):
+            raise FsOpError("删除失败")
+
+        real_delete = handler_module._fs_delete_file
+        monkeypatch.setattr(handler_module, "_fs_delete_file", broken_delete)
+        run_task(task, now=NOW)
+
+        # 删除失败：文件仍在，记录承载待删除义务
+        assert snapshot(task["source_dir"]) == {"a.mp4": 5}
+        assert state().get_success_state(key_of(task), file_key(filepath)) is not None
+
+        monkeypatch.setattr(handler_module, "_fs_delete_file", real_delete)
+        # 成功时间以真实时钟（time.time）写入，第二轮同样用真实时钟，
+        # 立即删除模式的记录才会"存在即已到期"
+        handler = run_task(task)
+
+        # 下轮到期重试：删除不触发 FFmpeg，文件与记录一并清除
+        assert len(calls) == 1
+        assert snapshot(task["source_dir"]) == {}
+        assert state().get_success_state(key_of(task), file_key(filepath)) is None
+        assert handler.stats.expired == 1
 
     def test_remove_source_delayed(self, run_task, tmp_path, stub_ffmpeg):
         task = ffmpeg_task(
@@ -188,6 +229,13 @@ class TestDisposition:
         assert snapshot(str(tmp_path / "bak")) == {"sub/a.mp4": 5}
         assert snapshot(task["source_dir"]) == {}
         assert handler.stats.processed == 1
+        # 备份成功：源文件离开源树，义务了结不留记录
+        assert (
+            state().get_success_state(
+                key_of(task), file_key(os.path.join(task["source_dir"], "sub", "a.mp4"))
+            )
+            is None
+        )
 
     def test_keep_in_place_by_default(self, run_task, tmp_path, stub_ffmpeg):
         task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
@@ -447,7 +495,7 @@ class TestDeduplication:
 
 
 # ============================================================
-# 延迟删除
+# 待删除清理（延迟删除到期，含立即删除模式的失败重试）
 # ============================================================
 
 
@@ -498,7 +546,7 @@ class TestExpiredCleanup:
         handler._cleanup_expired(app_context, [("a.mp4", filepath, file_key(filepath))])
 
         assert state().get_success_state(key_of(task), file_key(filepath)) is None
-        assert not app_context.logger.has("error", "删除过期源文件失败")
+        assert not app_context.logger.has("error", "删除源文件失败")
 
 
 # ============================================================

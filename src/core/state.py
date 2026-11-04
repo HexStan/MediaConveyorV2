@@ -5,13 +5,16 @@ dest_dir) 归一化而来——多个任务监听重叠目录时状态互不串�
 重排序与任务增删稳定。filepath 统一 normcase，Windows 大小写不同的
 路径指向同一条记录。
 
-记录的语义：
-- success_time 非 NULL 即"已成功处理过"，并附带成功时的源文件
-  size/mtime——源文件内容变化（size 或 mtime 不再吻合）后视为未处理，
-  重新处理；
-- failure_count 达到任务级 failure_count 后永久跳过该文件；
-- ffmpeg_failure_count 专计主命令失败，达到 fallback_count 后切换
-  备用命令；成功一次即双计数清零。
+记录的语义——记录的生命周期即义务的生命周期，只在义务存续期间存在：
+- 失败计数是重试义务：处理失败后必须重试，failure_count 达到任务级
+  failure_count 后转为永久跳过；ffmpeg_failure_count 专计主命令失败，
+  达到 fallback_count 后切换备用命令；成功一次即双计数清零；
+- 成功记录（success_time 非 NULL，附带成功时的源文件 size/mtime）仅当
+  源文件仍留在源树时存在：或承载待删除义务（remove_source 模式，到期
+  时刻 = success_time + source_expired_minutes，删除成功即清记录），或
+  承载防重复义务（源文件保留在原地；内容变化——size 或 mtime 不再吻合
+  ——即失效，重新处理）。源文件离开源树（删除 / 备份 / 直传移走）后
+  不留记录。
 """
 
 import contextlib
@@ -25,7 +28,7 @@ _KEY_SEPARATOR = "\x00"
 
 @dataclass(frozen=True)
 class SuccessState:
-    """已成功处理记录的快照（重处理判定与延迟删除的依据）。"""
+    """已成功处理记录的快照（防重复判定与待删除义务的依据）。"""
 
     success_time: float
     source_size: int

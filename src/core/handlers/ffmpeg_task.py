@@ -5,12 +5,13 @@
 1. 扫描：os.walk 确定性排序遍历 → 文件名分类流水线（classify）→
    状态判定（已成功且源文件未变化则跳过；失败达上限永久跳过）→
    修改时间冷却 → 媒体属性过滤（仅在配置了需要 ffprobe 的条件时探测）；
-2. 过期清理：延迟删除到期的源文件（删除成功才清记录，失败下轮重试）；
+2. 待删除清理：remove_source 模式下到期的源文件（source_expired_minutes
+   = 0 的立即删除模式，记录存在即已到期；删除成功才清记录，失败下轮重试）；
 3. 逐文件处理：稳定性检查（stable_duration 的 size 复查，睡眠分片可被
    fast 停止打断）→ FFmpeg 写入瞬态 part 文件（.{output}.mc-ffmpeg-part，
    成功后原子改名复原，失败与 fast 停止均清理）或 passthrough 直传 →
-   源文件善后（立即删除 / 延迟删除 / 备份 / 保留）→ 成功记录 →
-   清理空目录。
+   源文件善后（立即删除 / 延迟删除 / 备份 / 保留），状态记录仅在义务
+   存续时保留 → 清理空目录。
 
 单文件失败不中断本轮任务（状态库计数兜底，达到 failure_count 后永久
 跳过）；命令模板错误属配置级错误，中止本轮并给出明确报错。
@@ -68,7 +69,7 @@ class _ScanEntry:
 
 @dataclass
 class _ScanReport:
-    """单轮扫描的产出：待处理条目与延迟删除到期的源文件。"""
+    """单轮扫描的产出：待处理条目与待删除到期的源文件。"""
 
     entries: list[_ScanEntry] = field(default_factory=list)
     expired: list[tuple[str, str, str]] = field(default_factory=list)  # (rel, filepath, fkey)
@@ -136,7 +137,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
     # ---- 扫描 -----------------------------------------------------------
 
     def _scan(self, ctx: AppContext) -> _ScanReport:
-        """遍历源目录，产出待处理条目与延迟删除到期的源文件。"""
+        """遍历源目录，产出待处理条目与待删除到期的源文件。"""
         config = self._config
         state = ctx.require_state()
         now = self.now
@@ -158,12 +159,12 @@ class FFmpegTaskHandler(BaseTaskHandler):
                 fkey = file_key(filepath)
                 success = state.get_success_state(self._key, fkey)
                 if success is not None and not self._source_changed(filepath, success):
-                    # 已成功处理且源文件未变化：仅判定延迟删除是否到期
+                    # 已成功处理且源文件未变化：仅判定待删除义务是否到期
                     ctx.logger.debug(f"跳过 {rel_path}，原因: 文件已成功处理过")
                     self._collect_expired(report, config, rel_path, filepath, fkey, success)
                     continue
                 if success is not None:
-                    # 源文件内容已变化：旧记录（含延迟删除义务）随之失效
+                    # 源文件内容已变化：旧记录承载的义务随之失效
                     ctx.logger.info(f"源文件已变化，重新处理: {rel_path}")
                     state.delete_record(self._key, fkey)
 
@@ -232,14 +233,18 @@ class FFmpegTaskHandler(BaseTaskHandler):
         fkey: str,
         success: SuccessState,
     ) -> None:
-        """延迟删除判定：成功时间距今超过 source_expired_minutes 即到期。"""
-        if not config.remove_source or config.source_expired_minutes <= 0:
+        """待删除义务的到期判定：成功时间距今超过 source_expired_minutes 即到期。
+
+        source_expired_minutes = 0 的立即删除模式，记录存在即已到期——
+        删除失败后保留的成功记录由此在下轮重试删除。
+        """
+        if not config.remove_source:
             return
         if self.now - success.success_time >= config.source_expired_minutes * 60:
             report.expired.append((rel_path, filepath, fkey))
 
     def _cleanup_expired(self, ctx: AppContext, expired: list[tuple[str, str, str]]) -> None:
-        """删除到期的源文件；删除成功才清记录，失败保留记录下轮重试。"""
+        """删除到期的源文件；删除成功（义务履行）才清记录，失败保留记录下轮重试。"""
         for rel_path, filepath, fkey in expired:
             try:
                 _fs_delete_file(filepath)
@@ -248,9 +253,9 @@ class FFmpegTaskHandler(BaseTaskHandler):
                 ctx.require_state().delete_record(self._key, fkey)
                 continue
             except FsOpError as e:
-                ctx.logger.error(f"删除过期源文件失败: {rel_path}\n{e}")
+                ctx.logger.error(f"删除源文件失败: {rel_path}\n{e}")
                 continue
-            ctx.logger.info(f"已删除过期源文件: {rel_path}")
+            ctx.logger.info(f"已删除源文件: {rel_path}")
             ctx.require_state().delete_record(self._key, fkey)
             self._stats.record_expired()
 
@@ -331,9 +336,9 @@ class FFmpegTaskHandler(BaseTaskHandler):
             self._stats.record_failed()
             return
 
-        ctx.require_state().mark_success(
-            self._key, file_key(entry.filepath), time.time(), entry.size, entry.mtime
-        )
+        # 直传成功：源文件已移至目标目录、离开源树，义务了结不留记录
+        # （并顺带清掉此前失败尝试残留的计数）
+        ctx.require_state().delete_record(self._key, file_key(entry.filepath))
         self._stats.record_passthrough(entry.size)
         clean_empty_dirs(config.source_dir)
 
@@ -439,7 +444,12 @@ class FFmpegTaskHandler(BaseTaskHandler):
     def _handle_success(
         self, ctx: AppContext, entry: _ScanEntry, rel_dir: str, filename: str
     ) -> None:
-        """FFmpeg 处理成功后的源文件善后：立即删除 / 延迟删除 / 备份 / 保留。"""
+        """FFmpeg 处理成功后的源文件善后：立即删除 / 延迟删除 / 备份 / 保留。
+
+        状态记录仅在义务存续时保留：源文件离开源树（立即删除、备份成功）
+        即义务了结，不留记录；源文件仍在源树（延迟删除窗口、保留在原地、
+        删除失败待重试）才写成功记录，承载待删除 / 防重复义务。
+        """
         config = self._config
         state = ctx.require_state()
         fkey = file_key(entry.filepath)
@@ -448,11 +458,17 @@ class FFmpegTaskHandler(BaseTaskHandler):
             if config.source_expired_minutes == 0:
                 try:
                     _fs_delete_file(entry.filepath)
-                    ctx.logger.info(f"已删除源文件: {entry.rel_path}")
                 except FsOpError as e:
+                    # 删除义务未履行：写成功记录（待删除凭证），下轮经
+                    # 到期清理路径重试（立即删除模式记录存在即已到期）
                     ctx.logger.error(f"删除源文件失败: {entry.rel_path}\n{e}")
-                state.mark_success(self._key, fkey, time.time(), entry.size, entry.mtime)
+                    state.mark_success(self._key, fkey, time.time(), entry.size, entry.mtime)
+                else:
+                    ctx.logger.info(f"已删除源文件: {entry.rel_path}")
+                    # 义务已了结：源文件离开源树，不留记录（并清残留失败计数）
+                    state.delete_record(self._key, fkey)
             else:
+                # 延迟删除窗口：记录承载待删除义务，兼作窗口期防重复依据
                 state.mark_success(self._key, fkey, time.time(), entry.size, entry.mtime)
                 ctx.logger.info(
                     f"源文件 {entry.rel_path} 将在 {config.source_expired_minutes:g} 分钟后删除。"
@@ -472,9 +488,12 @@ class FFmpegTaskHandler(BaseTaskHandler):
                     state.increment_failure(self._key, fkey)
                     self._stats.record_failed()
                     return
+                # 备份成功：源文件离开源树，义务了结不留记录（并清残留失败计数）
+                state.delete_record(self._key, fkey)
             else:
                 ctx.logger.info(f"源文件保留在原位置: {entry.rel_path}")
-            state.mark_success(self._key, fkey, time.time(), entry.size, entry.mtime)
+                # 保留在原地：记录承载防重复义务（内容变化即失效重处理）
+                state.mark_success(self._key, fkey, time.time(), entry.size, entry.mtime)
 
         self._stats.record_processed(entry.size)
         clean_empty_dirs(config.source_dir)
