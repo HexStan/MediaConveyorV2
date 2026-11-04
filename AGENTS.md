@@ -63,7 +63,7 @@ uv run python scripts/smoke_test.py "dist/MediaConveyor-*.zip"          # 对发
 
 本项目由上游仓库 SmartArchiver（本地同级目录 `../SmartArchiver`）的常驻任务骨架裁剪而来，媒体领域功能自 MediaConveyor V1 移植；骨架逻辑与自实现逻辑的划分见 `SKELETON.md`。
 
-- 改动 `SKELETON.md` 中归属为“骨架”或“骨架 + 领域适配”的模块前，先读取 `SKELETON.md`，涉及机制语义时对照上游确认。
+- 骨架范围：`main.py`、`src/app/`、`src/core/handlers/__init__.py`、`src/core/handlers/base.py`、`src/core/task_config.py`、`src/core/task_plan.py`、`src/core/types.py`、`src/fs/`、`src/output/`、`src/platform_info.py`、`src/validation.py`。改动涉及上述路径前，先读取 `SKELETON.md` 确认归属；涉及机制语义时对照上游确认。
 - 当开发要求与媒体处理领域无关、属于常驻任务工具的通用能力（调度语义、实例控制、停止信号、日志与表现设施、文件原语等）时，建议维护者先在上游 SmartArchiver 实现，再移植回本项目，避免骨架分叉。
 
 ## 测试约定（权威文档：tests/README.md）
