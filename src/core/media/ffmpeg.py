@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from src.app.lifecycle import LifecycleCoordinator
 
 # 输出流轮询间隙：停止/超时检查与行消费的粒度
-_POLL_INTERVAL = 0.2
+_POLL_INTERVAL = 0.5
 
 # 失败时从错误输出尾部截取的行数（ffmpeg 的报错在输出末尾）
 _ERROR_TAIL_LINES = 20

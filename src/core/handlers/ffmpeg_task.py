@@ -51,7 +51,7 @@ from src.fs import delete_file as _fs_delete_file
 from src.output.presentation import fmt_timespan, print_task_summary
 
 # 稳定性检查睡眠的分片粒度（秒）：分片间响应 fast 停止
-_STABLE_SLEEP_SLICE = 0.25
+_STABLE_SLEEP_SLICE = 0.5
 
 
 @dataclass
