@@ -208,6 +208,64 @@ class TestPathValidation:
         assert not specs[0].blocked
         assert capture_log.has("warning", "backup_dir 将被忽略")
 
+    def test_failure_dir_inside_source_rejected(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    failure_dir=str(tmp_path / "src" / "failed"),
+                )
+            ],
+            capture_log,
+        )
+        assert specs[0].blocked
+        assert capture_log.has("error", "failure_dir")
+
+    def test_failure_dir_inside_dest_rejected(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    failure_dir=str(tmp_path / "dest" / "failed"),
+                )
+            ],
+            capture_log,
+        )
+        assert specs[0].blocked
+        assert capture_log.has("error", "failure_dir")
+
+    def test_failure_dir_equal_to_backup_dir_rejected(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    backup_dir=str(tmp_path / "vault"),
+                    failure_dir=str(tmp_path / "vault"),
+                )
+            ],
+            capture_log,
+        )
+        assert specs[0].blocked
+        assert capture_log.has("error", "failure_dir 与 backup_dir 不得相同")
+
+    def test_failure_dir_without_failure_count_warns_but_keeps_task(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    failure_dir=str(tmp_path / "failed"),
+                    failure_count=0,
+                )
+            ],
+            capture_log,
+        )
+        assert not specs[0].blocked
+        assert capture_log.has("warning", "failure_dir 将不会被使用")
+
 
 # ============================================================
 # 灰盒：run_tasks 编排（目录树快照 + 日志断言）

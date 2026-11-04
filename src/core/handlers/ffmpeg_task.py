@@ -3,11 +3,13 @@
 单轮执行的完整流水线（对齐 v1 MediaConveyor 的 scanner + processor 组合）：
 
 1. 扫描：os.walk 确定性排序遍历 → 文件名分类流水线（classify）→
-   状态判定（已成功且源文件未变化则跳过；失败达上限永久跳过，
-   failure_count = 0 表示永不因失败跳过）→
+   状态判定（已成功且源文件未变化则跳过；失败达上限的文件进入失败
+   隔离或永久跳过，failure_count = 0 表示永不因失败跳过）→
    修改时间冷却 → 媒体属性过滤（仅在配置了需要 ffprobe 的条件时探测）；
-2. 待删除清理：remove_source 模式下到期的源文件（source_expired_minutes
-   = 0 的立即删除模式，记录存在即已到期；删除成功才清记录，失败下轮重试）；
+2. 善后清理：remove_source 模式下到期的源文件（source_expired_minutes
+   = 0 的立即删除模式，记录存在即已到期；删除成功才清记录，失败下轮
+   重试）与已达失败上限的源文件（配置 failure_dir 时移入该目录并清
+   记录，移动失败下轮重试；未配置时永久跳过、留在源目录）；
 3. 逐文件处理：稳定性检查（stable_duration 的 size 复查，睡眠分片可被
    fast 停止打断）→ FFmpeg 写入瞬态 part 文件（.{output}.mc-ffmpeg-part，
    成功后原子改名复原，失败与 fast 停止均清理）或 passthrough 直传 →
@@ -15,8 +17,8 @@
    存续时保留 → 清理空目录。
 
 单文件失败不中断本轮任务（状态库计数兜底，达到 failure_count 后永久
-跳过，0 表示永不因失败跳过）；命令模板错误属配置级错误，中止本轮并
-给出明确报错。
+跳过，配置 failure_dir 时改为移入隔离目录；0 表示永不因失败跳过）；
+命令模板错误属配置级错误，中止本轮并给出明确报错。
 """
 
 import contextlib
@@ -71,10 +73,11 @@ class _ScanEntry:
 
 @dataclass
 class _ScanReport:
-    """单轮扫描的产出：待处理条目与待删除到期的源文件。"""
+    """单轮扫描的产出：待处理条目与待清理的源文件（待删除 / 待隔离）。"""
 
     entries: list[_ScanEntry] = field(default_factory=list)
     expired: list[tuple[str, str, str]] = field(default_factory=list)  # (rel, filepath, fkey)
+    evictions: list[tuple[str, str, str]] = field(default_factory=list)  # (rel, filepath, fkey)
 
 
 def _discard_part_file(part_path: str) -> None:
@@ -118,6 +121,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
         try:
             report = self._scan(ctx)
             self._cleanup_expired(ctx, report.expired)
+            self._evict_failed(ctx, report.evictions)
 
             if not report.entries:
                 self._log_monitoring_idle(ctx)
@@ -170,13 +174,18 @@ class FFmpegTaskHandler(BaseTaskHandler):
                     ctx.logger.info(f"源文件已变化，重新处理: {rel_path}")
                     state.delete_record(self._key, fkey)
 
-                # failure_count = 0 表示永不因失败跳过，失败文件每轮重试
+                # failure_count = 0 表示永不因失败跳过，失败文件每轮重试；
+                # 达到上限的文件：配置 failure_dir 时收集进隔离清单（移动
+                # 由 _evict_failed 执行，失败下轮重试），否则永久跳过
                 failures = state.get_failure_count(self._key, fkey)
                 if config.failure_count > 0 and failures >= config.failure_count:
-                    ctx.logger.debug(
-                        f"跳过 {rel_path}，原因: 失败次数 ({failures}) 已达到上限 ({config.failure_count})"
-                    )
-                    self._stats.record_skipped()
+                    if config.failure_dir:
+                        report.evictions.append((rel_path, filepath, fkey))
+                    else:
+                        ctx.logger.debug(
+                            f"跳过 {rel_path}，原因: 失败次数 ({failures}) 已达到上限 ({config.failure_count})"
+                        )
+                        self._stats.record_skipped()
                     continue
 
                 try:
@@ -261,6 +270,37 @@ class FFmpegTaskHandler(BaseTaskHandler):
             ctx.logger.info(f"已删除源文件: {rel_path}")
             ctx.require_state().delete_record(self._key, fkey)
             self._stats.record_expired()
+
+    def _evict_failed(self, ctx: AppContext, evictions: list[tuple[str, str, str]]) -> None:
+        """把已达失败上限的源文件移入 failure_dir（保持子目录结构）。
+
+        移动成功即义务了结：源文件离开源树，失败记录随之清除（用户之后
+        放回的同名文件从头处理）；移动失败保留记录与原文件，下轮重试；
+        文件已消失（用户手动移走等）时顺手清理失效记录。
+        """
+        config = self._config
+        moved = False
+        for rel_path, filepath, fkey in evictions:
+            if not os.path.exists(filepath):
+                # 文件已不在（用户手动移走/删除等）：顺手清理失效记录，避免每轮报错
+                ctx.require_state().delete_record(self._key, fkey)
+                continue
+            dst_dir = os.path.join(config.failure_dir, os.path.dirname(rel_path))
+            dst_filepath = os.path.join(dst_dir, os.path.basename(filepath))
+            try:
+                move_file(filepath, dst_filepath)
+            except TransferAbortedError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                ctx.logger.error(f"移入失败目录失败: {rel_path}\n{e}")
+                continue
+            ctx.logger.info(f"失败次数达到上限，已移入失败目录: {rel_path}")
+            ctx.require_state().delete_record(self._key, fkey)
+            self._stats.record_evicted()
+            moved = True
+
+        if moved:
+            clean_empty_dirs(config.source_dir)
 
     # ---- 逐文件处理 -----------------------------------------------------
 

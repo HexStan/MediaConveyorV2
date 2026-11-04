@@ -142,8 +142,11 @@ def _validate_paths(config: TaskConfig, index: int, logger: Logger) -> bool:
 
     - dest_dir 不得等于或位于 source_dir 之内，source_dir 也不得位于
       dest_dir 之内：任务输出写入扫描树会形成"输出再被扫描"的反馈回路；
-    - backup_dir 不得位于 source_dir/dest_dir 之内：成功善后的移动/清理
-      会与备份目录互相破坏。
+    - backup_dir / failure_dir 不得位于 source_dir/dest_dir 之内：善后
+      移动会与源树/输出树互相破坏，failure_dir 位于源树内还会因失败
+      记录随移动清零而陷入"失败 → 移走 → 重扫 → 再失败"的死循环；
+    - failure_dir 不得等于 backup_dir：成功归档与失败隔离混放会互相
+      覆盖同名文件。
     """
     if _is_within(config.dest_dir, config.source_dir) or _is_within(
         config.source_dir, config.dest_dir
@@ -153,13 +156,22 @@ def _validate_paths(config: TaskConfig, index: int, logger: Logger) -> bool:
         )
         return False
 
-    if config.backup_dir and (
-        _is_within(config.backup_dir, config.source_dir)
-        or _is_within(config.backup_dir, config.dest_dir)
+    for field_name in ("backup_dir", "failure_dir"):
+        target = getattr(config, field_name)
+        if target and (
+            _is_within(target, config.source_dir) or _is_within(target, config.dest_dir)
+        ):
+            logger.error(
+                f"任务 #{index + 1} 的 {field_name} 不得位于 source_dir 或 dest_dir 之内，跳过该任务。"
+            )
+            return False
+
+    if (
+        config.failure_dir
+        and config.backup_dir
+        and _norm_path(config.failure_dir) == _norm_path(config.backup_dir)
     ):
-        logger.error(
-            f"任务 #{index + 1} 的 backup_dir 不得位于 source_dir 或 dest_dir 之内，跳过该任务。"
-        )
+        logger.error(f"任务 #{index + 1} 的 failure_dir 与 backup_dir 不得相同，跳过该任务。")
         return False
 
     return True
@@ -218,6 +230,11 @@ def resolve_tasks(
             continue
         if config.remove_source and config.backup_dir:
             logger.warning(f"任务 #{index + 1} 配置了 remove_source = true，backup_dir 将被忽略。")
+        if config.failure_dir and config.failure_count == 0:
+            logger.warning(
+                f"任务 #{index + 1} 配置了 failure_dir，但 failure_count = 0"
+                "（永不因失败跳过），failure_dir 将不会被使用。"
+            )
 
         drafts.append(TaskSpec(config, task_id, depends_on))
 

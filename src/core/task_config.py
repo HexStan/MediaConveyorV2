@@ -207,6 +207,9 @@ class TaskConfig(BaseModel):
     source_expired_minutes: SecondsValue = Field(default=0, ge=0)
     # 成功后源文件的归档目录（保持子目录结构）；remove_source 为 true 时忽略
     backup_dir: str = ""
+    # 失败隔离目录（保持子目录结构）：文件失败次数达到 failure_count 上限后
+    # 移入该目录；空字符串表示不启用（失败文件永久留在源目录不再处理）
+    failure_dir: str = ""
 
     @model_validator(mode="after")
     def _check_fallback_config(self) -> Self:

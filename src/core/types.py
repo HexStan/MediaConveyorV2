@@ -31,6 +31,7 @@ class TaskRunStats:
         self._failed = 0
         self._skipped = 0
         self._expired = 0
+        self._evicted = 0
         self._total_bytes = 0
 
     @property
@@ -54,6 +55,10 @@ class TaskRunStats:
         return self._expired
 
     @property
+    def evicted(self) -> int:
+        return self._evicted
+
+    @property
     def total_bytes(self) -> int:
         return self._total_bytes
 
@@ -73,3 +78,6 @@ class TaskRunStats:
 
     def record_expired(self) -> None:
         self._expired += 1
+
+    def record_evicted(self) -> None:
+        self._evicted += 1

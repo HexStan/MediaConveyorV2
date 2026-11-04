@@ -42,6 +42,9 @@ class TaskStats(Protocol):
     def expired(self) -> int: ...
 
     @property
+    def evicted(self) -> int: ...
+
+    @property
     def total_bytes(self) -> int: ...
 
 
@@ -75,6 +78,8 @@ def print_task_summary(stats: TaskStats, duration: float, logger: Logger) -> Non
         parts.append(f"直传 {stats.passthrough} 项")
     if stats.expired > 0:
         parts.append(f"源文件清理 {stats.expired} 项")
+    if stats.evicted > 0:
+        parts.append(f"移入失败目录 {stats.evicted} 项")
     if stats.skipped > 0:
         parts.append(f"因多次失败跳过 {stats.skipped} 项")
     logger.info("，".join(parts) + "。")

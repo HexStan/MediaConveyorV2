@@ -120,6 +120,10 @@ output_filename = "{basename}-encoded.mp4"
 # remove_source = true 时本项被忽略
 # backup_dir = "./backup"
 
+# 【选填】失败达到上限后的隔离目录（保持子目录结构）；默认不启用（失败文件永久留在源目录）
+# 范围：不得位于 source_dir / dest_dir 之内，不得与 backup_dir 相同；
+# failure_dir = "./failed"
+
 # 【选填】依赖的前置任务 id 列表：前置任务在本轮完成后才会执行本任务
 # 范围：id 数组，仅允许引用配置顺序中位于本任务之前的任务 id（单个字符串视为单元素列表）
 # depends_on = []

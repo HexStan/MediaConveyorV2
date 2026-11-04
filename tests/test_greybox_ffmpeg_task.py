@@ -396,6 +396,159 @@ class TestFailures:
 
 
 # ============================================================
+# 失败隔离目录（failure_dir）
+# ============================================================
+
+
+class TestFailureDir:
+    def test_limit_reached_file_moved_to_failure_dir(self, run_task, tmp_path, stub_ffmpeg):
+        """达到失败上限的文件在下一轮被移入 failure_dir，记录随之清除。"""
+        calls, fstate = stub_ffmpeg
+        fstate["returncode"] = 1
+        task = ffmpeg_task(
+            tmp_path / "src",
+            tmp_path / "dest",
+            failure_count=2,
+            failure_dir=str(tmp_path / "failed"),
+        )
+        filepath = os.path.join(task["source_dir"], "a.mp4")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+        state().increment_failure(key_of(task), file_key(filepath))  # 此前已失败 1 次
+
+        first = run_task(task, now=NOW)
+
+        # 第一轮：再次失败，计数达到上限，文件仍在源目录
+        assert len(calls) == 1
+        assert snapshot(task["source_dir"]) == {"a.mp4": 5}
+        assert state().get_failure_count(key_of(task), file_key(filepath)) == 2
+        assert first.stats.failed == 1
+
+        # 第二轮：不再触发 FFmpeg，直接移入失败目录
+        second = run_task(task, now=NOW)
+
+        assert len(calls) == 1
+        assert snapshot(task["source_dir"]) == {}
+        assert snapshot(str(tmp_path / "failed")) == {"a.mp4": 5}
+        # 义务了结：源文件离开源树，失败记录随之清除
+        assert state().get_failure_count(key_of(task), file_key(filepath)) == 0
+        assert second.stats.evicted == 1
+        assert second.stats.failed == 0
+        assert AppContext.get().logger.has("info", "已移入失败目录")
+
+    def test_failure_dir_preserves_subdir(self, run_task, tmp_path, stub_ffmpeg):
+        task = ffmpeg_task(
+            tmp_path / "src",
+            tmp_path / "dest",
+            failure_count=1,
+            failure_dir=str(tmp_path / "failed"),
+        )
+        filepath = os.path.join(task["source_dir"], "sub", "a.mp4")
+        make_tree(task["source_dir"], {"sub/a.mp4": b"video"})
+        state().increment_failure(key_of(task), file_key(filepath))
+
+        run_task(task, now=NOW)
+
+        assert snapshot(str(tmp_path / "failed")) == {"sub/a.mp4": 5}
+        assert snapshot(task["source_dir"]) == {}
+
+    def test_replaced_file_after_eviction_processed_fresh(self, run_task, tmp_path, stub_ffmpeg):
+        """隔离后放回源路径的同名文件从头处理：失败记录已随移动清除。"""
+        calls, fstate = stub_ffmpeg
+        task = ffmpeg_task(
+            tmp_path / "src",
+            tmp_path / "dest",
+            failure_count=1,
+            failure_dir=str(tmp_path / "failed"),
+        )
+        filepath = os.path.join(task["source_dir"], "a.mp4")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+        state().increment_failure(key_of(task), file_key(filepath))
+
+        run_task(task, now=NOW)  # 达到上限，移入失败目录
+        assert snapshot(str(tmp_path / "failed")) == {"a.mp4": 5}
+
+        fstate["returncode"] = 0
+        make_tree(task["source_dir"], {"a.mp4": b"fixed"})
+        run_task(task, now=NOW)
+
+        # 新文件正常处理，而非被再次隔离
+        assert len(calls) == 1
+        assert snapshot(task["dest_dir"]) == {"a-encoded.mp4": 7}
+        assert snapshot(task["source_dir"]) == {"a.mp4": 5}
+
+    def test_zero_failure_count_never_evicts(self, run_task, tmp_path, stub_ffmpeg):
+        """failure_count = 0 表示永不因失败跳过：failure_dir 不生效，文件每轮重试。"""
+        calls, fstate = stub_ffmpeg
+        fstate["returncode"] = 1
+        task = ffmpeg_task(
+            tmp_path / "src",
+            tmp_path / "dest",
+            failure_count=0,
+            failure_dir=str(tmp_path / "failed"),
+        )
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+
+        run_task(task, now=NOW)
+        run_task(task, now=NOW)
+
+        assert len(calls) == 2
+        assert snapshot(task["source_dir"]) == {"a.mp4": 5}
+        assert not os.path.exists(str(tmp_path / "failed"))
+
+    def test_move_failure_retries_next_round(self, run_task, tmp_path, stub_ffmpeg):
+        """移动失败（隔离目录不可用）：源文件与记录保留，下轮自动重试。"""
+        blocker = tmp_path / "failed"  # 同名文件挡路：ensure_dir 必然失败
+        blocker.write_bytes(b"x")
+        task = ffmpeg_task(
+            tmp_path / "src",
+            tmp_path / "dest",
+            failure_count=1,
+            failure_dir=str(blocker),
+        )
+        filepath = os.path.join(task["source_dir"], "a.mp4")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+        state().increment_failure(key_of(task), file_key(filepath))
+
+        run_task(task, now=NOW)
+
+        assert snapshot(task["source_dir"]) == {"a.mp4": 5}
+        assert state().get_failure_count(key_of(task), file_key(filepath)) == 1
+        assert AppContext.get().logger.has("error", "移入失败目录失败")
+
+        blocker.unlink()
+        handler = run_task(task, now=NOW)
+
+        assert snapshot(str(tmp_path / "failed")) == {"a.mp4": 5}
+        assert snapshot(task["source_dir"]) == {}
+        assert state().get_failure_count(key_of(task), file_key(filepath)) == 0
+        assert handler.stats.evicted == 1
+
+    def test_vanished_eviction_file_record_cleaned(
+        self, run_task, app_context, tmp_path, stub_ffmpeg
+    ):
+        """扫描与移动之间文件消失（竞态）：清记录、不报错（白盒驱动清理步骤）。"""
+        task = ffmpeg_task(
+            tmp_path / "src",
+            tmp_path / "dest",
+            failure_count=1,
+            failure_dir=str(tmp_path / "failed"),
+        )
+        filepath = os.path.join(task["source_dir"], "a.mp4")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+        fkey = file_key(filepath)
+        state().increment_failure(key_of(task), fkey)
+        os.remove(filepath)
+
+        handler = run_task(task, now=NOW)
+        assert handler is not None
+        # 模拟"扫描时文件还在、移动时已消失"的竞态窗口
+        handler._evict_failed(app_context, [("a.mp4", filepath, fkey)])
+
+        assert state().get_failure_count(key_of(task), fkey) == 0
+        assert not app_context.logger.has("error", "移入失败目录失败")
+
+
+# ============================================================
 # part 文件生命周期（瞬态命名 → 原子复原 / 清理）
 # ============================================================
 
