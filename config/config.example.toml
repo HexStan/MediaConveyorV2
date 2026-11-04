@@ -66,11 +66,12 @@ source_dir = "./source"
 # 【必填】目标目录：处理输出目录（保持源目录的子目录结构）
 dest_dir = "./dest"
 
-# 【必填】FFmpeg 命令模板：{input} → 源文件完整路径；{output} → 输出文件完整路径
-#（文件名由 output_filename 决定）。占位符书写规则详见 README 第三步
+# 【必填】FFmpeg 参数模板：{input} → 源文件完整路径；{output} → 输出文件完整路径
+#（文件名由 output_filename 决定）。ffmpeg 可执行文件与预置参数（-y 覆盖输出、
+# -nostdin 禁用 stdin 等）由程序自动添加，本模板只填参数。占位符书写规则详见
+# README 第三步
 ffmpeg_cmd = """
-ffmpeg -y \
-  -i {input} \
+-i {input} \
   -c:v libx264 \
   -preset fast \
   -crf 23 \
@@ -81,11 +82,10 @@ ffmpeg -y \
 # 输出扩展名直接写在模板里；须为纯文件名（不允许路径分隔符）
 output_filename = "{basename}-encoded.mp4"
 
-# 【选填】备用命令模板：主命令连续失败 fallback_count 次后启用
+# 【选填】备用参数模板：主命令连续失败 fallback_count 次后启用
 #（与主命令共用 output_filename）
 # ffmpeg_cmd_fallback = """
-# ffmpeg -y \
-#   -i {input} \
+# -i {input} \
 #   -c:v libx264 \
 #   -preset medium \
 #   -crf 28 \
@@ -173,8 +173,7 @@ name = "音频转码"
 source_dir = "./music"
 dest_dir = "./audio"
 ffmpeg_cmd = """
-ffmpeg -y \
-  -i {input} \
+-i {input} \
   -c:a libmp3lame \
   -q:a 2 \
   {output}

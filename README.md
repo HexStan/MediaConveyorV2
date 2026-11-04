@@ -127,18 +127,18 @@
 source_dir = "./source"                     # 【必填】源目录（递归扫描）
 dest_dir = "./dest"                         # 【必填】目标目录（保持子目录结构）
 ffmpeg_cmd = """
-ffmpeg -y \
-  -i {input} \
+-i {input} \
   -c:v libx264 \
   -preset fast \
   -crf 23 \
   {output}
-"""                                          # 【必填】FFmpeg 命令模板
+"""                                          # 【必填】FFmpeg 参数模板
 output_filename = "{basename}-encoded.mp4"   # 【必填】输出文件名模板
 ```
 
 > **占位符说明**：
 >
+> - ffmpeg 可执行文件与预置参数（覆盖输出 `-y`、禁用 stdin `-nostdin` 等）由程序自动添加，模板中只填写 FFmpeg 参数。
 > - `{input}` → 源文件完整路径；`{output}` → 输出文件完整路径（目标目录下保持子目录结构，文件名由 `output_filename` 渲染决定）。
 > - 两个占位符的值由程序按运行平台自动加引号，模板中**无需手写引号**（手写会与之叠加导致路径错误）。
 > - `output_filename` 中可用 `{basename}`（源文件名不含扩展名），输出扩展名直接写在模板里；须为纯文件名，不允许出现路径分隔符。
@@ -227,8 +227,7 @@ passthrough_patterns = ["*.srt", "*.jpg"]    # 匹配到的文件（如字幕、
 failure_count = 3
 
 ffmpeg_cmd_fallback = """
-ffmpeg -y \
-  -i {input} \
+-i {input} \
   -c:v libx264 \
   -preset medium \
   -crf 28 \
