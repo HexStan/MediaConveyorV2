@@ -55,9 +55,9 @@ runtime = [
 dev = [
     { include-group = "runtime" },
     # pytest 不属于运行依赖，按 AGENTS.md 约定经 dev 组安装
-    "pytest==9.1.1",
+    "pytest==9.2.0",
     # Ruff 的扩展默认规则集随版本变化（见 [tool.ruff] 头部注释），钉版本以保证 lint 结果可复现
-    "ruff==0.17.2",
+    "ruff==0.17.3",
     # Pyrefly 的版本策略见下方 [tool.pyrefly] 头部注释
     "pyrefly==1.4.0",
     # typeshed 官方存根：psutil / croniter 未自带 py.typed，补齐后参与类型检查
