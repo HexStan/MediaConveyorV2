@@ -97,6 +97,7 @@ output_filename = "{basename}-encoded.mp4"
 # fallback_count = 3
 
 # 【选填】单个文件失败次数上限，达到后永久跳过该文件（成功一次即清零）；默认 3
+# 0 表示永不因失败跳过，失败文件每轮重试
 # 范围：≥ 0 的整数
 # failure_count = 3
 
