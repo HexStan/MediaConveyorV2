@@ -1,4 +1,4 @@
-"""FFmpeg 命令执行：命令组装、子进程托管、进度流式输出与超时控制。
+"""FFmpeg 命令执行：命令组装、子进程托管、progress 协议消费与超时控制。
 
 命令组装分两步：output_filename 模板（仅 {basename}）先渲染出输出
 文件名，与 dest 子目录结构拼成 {output} 的值；参数模板再以
@@ -12,8 +12,16 @@
 整树终止，不留孤儿 ffmpeg；停止指令在输出流的轮询间隙被消费，中止
 以 TransferAbortedError 向上传播，与 fs 层的中止语义一致。
 
-进度行（含 time=/speed= 的 stderr 行）以 5 秒节流经 logger 输出——
-不再区分 TTY/非 TTY 的单行覆盖打印：控制台呈现由 output 层统一负责。
+进度走 FFmpeg progress 协议：程序预置 -nostats 关闭 stderr 的周期
+stats 行、-progress pipe:1 让进度块写入 stdout。stdout 读取线程以
+progress= 行为块边界切块，主轮询循环把块解析为快照并渲染成中文进度行
+（format_progress），交 output 层的 ProgressReporter 分发——日志文件
+定宽原位覆盖（5 秒）、控制台 TTY 单行覆盖（1 秒）/ 非 TTY 追加（5 秒），
+落笔节奏与覆盖形态由 output 层负责。无新块时也以最新快照重渲染，计时器
+持续走动；progress=end 的快照在进程结束后终写一次（finish），异常结束
+（失败 / 超时 / fast 中止，不会有 end 块）只做终端行归还（close），最后
+一行进度原样保留。进度不再经 logger 输出，取消「FFmpeg 运行报告」行——
+终态由终写进度行承载。
 """
 
 import queue
@@ -21,17 +29,17 @@ import shlex
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.fs import TransferAbortedError
 from src.output.logger import Logger
+from src.output.presentation import fmt_size
+from src.output.progress import ProgressReporter
 from src.platform_info import is_windows
 
 if TYPE_CHECKING:
     from src.app.lifecycle import LifecycleCoordinator
-
-# 进度行日志的节流间隔（秒）
-_PROGRESS_LOG_INTERVAL = 5.0
 
 # 输出流轮询间隙：停止/超时检查与行消费的粒度
 _POLL_INTERVAL = 0.2
@@ -48,8 +56,13 @@ FFMPEG_BIN = "ffmpeg"
 # - -y：输出文件已存在时直接覆盖（part 文件机制下正常不会冲突，防极端
 #   情形下 ffmpeg 交互式询问挂起进程）；
 # - -nostdin：禁用 stdin（ffmpeg 默认读 stdin，前台运行时按键 q 会误停
-#   正在进行的转码）。
-FFMPEG_PRESET_ARGS: tuple[str, ...] = ("-y", "-nostdin")
+#   正在进行的转码）；
+# - -nostats：关闭 stderr 的周期 stats 行（frame=/time=/speed=），错误
+#   输出只剩真正的日志与报错，进度数据改由 progress 协议提供；
+# - -progress pipe:1：progress 协议块写入 stdout，经读取线程切块解析
+#   （见模块 docstring）。用户模板若自身写 stdout 会与进度块交叠，
+#   本项目的文件型输出任务不涉及该形态。
+FFMPEG_PRESET_ARGS: tuple[str, ...] = ("-y", "-nostdin", "-nostats", "-progress", "pipe:1")
 
 
 class TemplateFormatError(ValueError):
@@ -130,6 +143,100 @@ def part_output_filename(out_filename: str) -> str:
     return f"{FFMPEG_PART_PREFIX}{out_filename}"
 
 
+# ---- progress 协议：解析与渲染 ----------------------------------------
+
+# progress 协议的状态值 → 展示用词
+_PROGRESS_STATE = {"continue": "进行中", "end": "已完成"}
+
+# 进度字段缺失（N/A / 尚未产出）时的占位符
+_PROGRESS_PLACEHOLDER = "--"
+
+
+@dataclass(frozen=True, slots=True)
+class FFmpegProgress:
+    """progress 协议单块的解析结果。
+
+    数值类字段保留 ffmpeg 的原始字符串（码率/帧率/速率的量纲与格式由
+    ffmpeg 决定，展示层不做二次加工）；仅 total_size（字节）解析为 int
+    供体积格式化，N/A 或缺失为 None。缺失字段以空字符串表示，由渲染层
+    补占位符。
+    """
+
+    progress: str  # continue / end
+    frame: str
+    fps: str
+    bitrate: str
+    total_size: int | None
+    out_time: str
+    dup_frames: str
+    drop_frames: str
+    speed: str
+
+
+def parse_progress_block(lines: list[str]) -> FFmpegProgress | None:
+    """解析 progress 协议的单个 key=value 块；不含 progress 键时返回 None。
+
+    ffmpeg 的每个进度块恒以 ``progress=`` 行收尾，无该键的内容不构成块。
+    """
+    fields: dict[str, str] = {}
+    for line in lines:
+        key, sep, value = line.partition("=")
+        if sep:
+            fields[key.strip()] = value.strip()
+    if "progress" not in fields:
+        return None
+    raw_size = fields.get("total_size", "")
+    return FFmpegProgress(
+        progress=fields["progress"],
+        frame=fields.get("frame", ""),
+        fps=fields.get("fps", ""),
+        bitrate=fields.get("bitrate", ""),
+        total_size=int(raw_size) if raw_size.isdigit() else None,
+        out_time=fields.get("out_time", ""),
+        dup_frames=fields.get("dup_frames", ""),
+        drop_frames=fields.get("drop_frames", ""),
+        speed=fields.get("speed", ""),
+    )
+
+
+def _format_timer(seconds: float) -> str:
+    """计时器格式：进程启动至今的 wall time，恒为 HH:MM:SS。"""
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _format_out_time(out_time: str) -> str:
+    """输出时间戳：丢弃小数部分（00:00:04.200000 → 00:00:04）。"""
+    if not out_time or out_time == "N/A":
+        return _PROGRESS_PLACEHOLDER
+    cut = out_time.find(".")
+    return out_time if cut < 0 else out_time[:cut]
+
+
+def format_progress(progress: FFmpegProgress, elapsed: float) -> str:
+    """渲染中文进度行（三种输出形态共用的唯一格式，见模块 docstring）。"""
+    size = (
+        fmt_size(progress.total_size, binary=True)
+        if progress.total_size is not None
+        else _PROGRESS_PLACEHOLDER
+    )
+    fields = [
+        f"持续时间：{_format_timer(elapsed)}",
+        f"输出时间戳：{_format_out_time(progress.out_time)}",
+        f"当前帧：{progress.frame or _PROGRESS_PLACEHOLDER}",
+        f"码率：{progress.bitrate or _PROGRESS_PLACEHOLDER}",
+        f"体积：{size}",
+        f"帧率：{progress.fps or _PROGRESS_PLACEHOLDER}",
+        f"速率：{progress.speed or _PROGRESS_PLACEHOLDER}",
+        f"复制帧：{progress.dup_frames or _PROGRESS_PLACEHOLDER}",
+        f"丢弃帧：{progress.drop_frames or _PROGRESS_PLACEHOLDER}",
+    ]
+    state = _PROGRESS_STATE.get(progress.progress, progress.progress)
+    return f"【{state}】 " + " | ".join(fields)
+
+
 def _consume_stderr(process: subprocess.Popen[str], lines: queue.Queue[str]) -> None:
     """逐块读取子进程 stderr，按行拆分后投入队列（在独立线程中运行）。"""
     buffer = ""
@@ -160,6 +267,56 @@ def _consume_stderr(process: subprocess.Popen[str], lines: queue.Queue[str]) -> 
         lines.put(tail)
 
 
+def _consume_stdout(process: subprocess.Popen[str], blocks: queue.Queue[list[str]]) -> None:
+    """逐块读取子进程 stdout 的 progress 协议输出（在独立线程中运行）。
+
+    以 ``progress=`` 行为块边界把整块行列表投入队列；空行跳过，无
+    progress= 收尾的残留行（异常终止时的半块）不构成块、直接丢弃。
+    readline 逐行读取保证低延迟：行一到即返回，不等凑满读取长度。
+    """
+    stream = process.stdout
+    if stream is None:  # pragma: no cover - Popen(stdout=PIPE) 保证非 None
+        return
+    block: list[str] = []
+    while True:
+        try:
+            raw = stream.readline()
+        except OSError, ValueError:
+            break
+        if not raw:
+            break
+        line = raw.decode("utf-8", errors="ignore").strip()
+        if not line:
+            continue
+        block.append(line)
+        if line.startswith("progress="):
+            blocks.put(block)
+            block = []
+
+
+def _absorb_blocks(
+    blocks: queue.Queue[list[str]],
+    last_progress: FFmpegProgress | None,
+    finished_line: str | None,
+    start_time: float,
+) -> tuple[FFmpegProgress | None, str | None]:
+    """消费队列中就绪的 progress 块；返回 (最新快照, end 终写行)。
+
+    end 块即最终快照：其行以当下计时定格，之后不再产生新的进度行。
+    """
+    while True:
+        try:
+            block = blocks.get_nowait()
+        except queue.Empty:
+            return last_progress, finished_line
+        parsed = parse_progress_block(block)
+        if parsed is None:
+            continue
+        last_progress = parsed
+        if parsed.progress == "end" and finished_line is None:
+            finished_line = format_progress(parsed, time.time() - start_time)
+
+
 def run_ffmpeg(
     cmd: str,
     *,
@@ -167,39 +324,52 @@ def run_ffmpeg(
     logger: Logger,
     coordinator: LifecycleCoordinator,
     timeout: float = 0,
+    reporter: ProgressReporter | None = None,
 ) -> bool:
     """执行拼接完成的 ffmpeg 命令；返回是否成功。
 
     - 停止：fast 中止信号到达时终止进程树并抛 TransferAbortedError；
     - 超时：timeout > 0 时超时终止进程树，按失败处理（返回 False）；
-    - 进度：含 time=/speed= 的行以 5 秒节流输出，命令结束时输出
-      最终运行报告。
+    - 进度：progress 协议块解析渲染后交 reporter 分发（节流与覆盖形态
+      由 output 层决定）；progress=end 的快照在进程结束后终写一次，
+      异常结束（失败/超时/中止）不终写，最后一行进度原样保留。
     """
+    if reporter is None:
+        reporter = logger.progress_reporter()
     start_time = time.time()
     try:
-        process = subprocess.Popen(
-            cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-        )
+        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except OSError as e:
         logger.error(f"无法启动 FFmpeg: {e}")
         return False
 
     coordinator.register_process(process)
     lines: queue.Queue[str] = queue.Queue()
+    blocks: queue.Queue[list[str]] = queue.Queue()
     reader = threading.Thread(target=_consume_stderr, args=(process, lines), daemon=True)
+    progress_reader = threading.Thread(target=_consume_stdout, args=(process, blocks), daemon=True)
     reader.start()
+    progress_reader.start()
 
     deadline = start_time + timeout if timeout > 0 else None
     timed_out = False
     error_output: list[str] = []
-    final_status = ""
-    last_progress_log = 0.0
+    last_progress: FFmpegProgress | None = None
+    finished_line: str | None = None  # progress=end 时刻的终写行
 
     try:
         while True:
             if coordinator.is_aborted():
                 coordinator.terminate_children(logger)
                 raise TransferAbortedError()
+
+            last_progress, finished_line = _absorb_blocks(
+                blocks, last_progress, finished_line, start_time
+            )
+            # 无新块也以最新快照重渲染：计时器持续走动；落笔节奏由
+            # reporter 的各 sink 节流；end 之后不再产生新的进度行
+            if reporter is not None and last_progress is not None and finished_line is None:
+                reporter.update(format_progress(last_progress, time.time() - start_time))
 
             try:
                 line = lines.get(timeout=_POLL_INTERVAL)
@@ -219,14 +389,19 @@ def run_ffmpeg(
                 continue
 
             error_output.append(line)
-            if "time=" in line or "speed=" in line:
-                final_status = line
-                now = time.time()
-                if now - last_progress_log >= _PROGRESS_LOG_INTERVAL:
-                    logger.info(f"FFmpeg 进度: {line}")
-                    last_progress_log = now
     finally:
         coordinator.unregister_process(process)
+        if reporter is not None:
+            # end 块可能在进程退出与最后一次排空间才抵达：先收尾 stdout
+            # 读取线程并清空剩余块，再按有无 end 快照决定终写或异常收尾
+            progress_reader.join(timeout=_POLL_INTERVAL)
+            last_progress, finished_line = _absorb_blocks(
+                blocks, last_progress, finished_line, start_time
+            )
+            if finished_line is not None:
+                reporter.finish(finished_line)
+            else:
+                reporter.close()
 
     process.wait()
     elapsed = time.time() - start_time
@@ -237,8 +412,6 @@ def run_ffmpeg(
 
     if process.returncode == 0:
         logger.info(f"FFmpeg 处理完成: {rel_path}，耗时 {elapsed:.1f} 秒。")
-        if final_status:
-            logger.info(f"FFmpeg 运行报告: {final_status}")
         return True
 
     _log_error_tail(error_output, logger, rel_path)
