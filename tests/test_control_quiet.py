@@ -60,7 +60,7 @@ def test_wait_instance_started_detects_lock(capture_log, unique_name):
 def test_wait_instance_started_times_out_without_instance(unique_name):
     """无实例持有锁时等待到超时，返回 False。"""
     started = time.monotonic()
-    assert not control._wait_instance_started(unique_name, timeout=0.3)
+    assert not control._wait_instance_started(unique_name, timeout=0.3, poll_interval=0.05)
     assert time.monotonic() - started >= 0.3
 
 
@@ -68,7 +68,7 @@ def test_wait_instance_started_reads_module_timeout_default(unique_name, monkeyp
     """timeout 缺省时每次调用读取模块常量——测试注入缩短等待的接线。"""
     monkeypatch.setattr(control, "_START_CONFIRM_TIMEOUT", 0.2)
     started = time.monotonic()
-    assert not control._wait_instance_started(unique_name)
+    assert not control._wait_instance_started(unique_name, poll_interval=0.05)
     elapsed = time.monotonic() - started
     assert 0.2 <= elapsed < 5.0
 

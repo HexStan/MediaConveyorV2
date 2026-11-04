@@ -234,7 +234,7 @@ def _run_once_blocker(instance_name: str) -> str | None:
 
 
 def _wait_instance_started(
-    instance_name: str, timeout: float | None = None, poll_interval: float = 0.1
+    instance_name: str, timeout: float | None = None, poll_interval: float = 0.5
 ) -> bool:
     """轮询实例锁，确认分离式子进程已获锁运行（``start --quiet`` 的确认信号）。
 
@@ -253,7 +253,10 @@ def _wait_instance_started(
 
 
 def _wait_run_once_accepted(
-    instance_name: str, sent_ts: float, timeout: float | None = None
+    instance_name: str,
+    sent_ts: float,
+    timeout: float | None = None,
+    poll_interval: float = 0.5,
 ) -> bool:
     """轮询状态文件，等待受理回执（``last_run_once >= sent_ts``）。
 
@@ -272,7 +275,7 @@ def _wait_run_once_accepted(
             ack = state.get("last_run_once")
             if isinstance(ack, (int, float)) and ack >= sent_ts:
                 return True
-        time.sleep(0.1)
+        time.sleep(poll_interval)
     return False
 
 

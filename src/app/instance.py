@@ -320,7 +320,7 @@ def read_state(instance_name: str) -> dict[str, Any] | None:
 def wait_for_exit(
     instance_name: str,
     timeout: float | None = None,
-    poll_interval: float = 0.25,
+    poll_interval: float = 0.5,
     on_wait: Callable[[float], None] | None = None,
 ) -> bool:
     """阻塞等待实例退出（基于锁探测轮询），返回 True 表示已退出。

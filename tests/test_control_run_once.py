@@ -81,14 +81,18 @@ def test_wait_run_once_accepted_ignores_stale_ack(capture_log, unique_name):
     stale_ts = time.time() - 10
     with SingleInstance(unique_name, capture_log):
         write_state(unique_name, PHASE_SLEEPING, last_run_once=stale_ts)
-        assert not control._wait_run_once_accepted(unique_name, stale_ts + 1, timeout=0.3)
+        assert not control._wait_run_once_accepted(
+            unique_name, stale_ts + 1, timeout=0.3, poll_interval=0.05
+        )
 
 
 def test_wait_run_once_accepted_times_out_without_ack(capture_log, unique_name):
     with SingleInstance(unique_name, capture_log):
         write_state(unique_name, PHASE_SLEEPING)
         started = time.monotonic()
-        assert not control._wait_run_once_accepted(unique_name, time.time(), timeout=0.3)
+        assert not control._wait_run_once_accepted(
+            unique_name, time.time(), timeout=0.3, poll_interval=0.05
+        )
         assert time.monotonic() - started >= 0.3
 
 
