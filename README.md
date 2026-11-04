@@ -220,11 +220,13 @@ passthrough_patterns = ["*.srt", "*.jpg"]    # 匹配到的文件（如字幕、
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | `failure_count` | 单个文件处理失败后的最大容忍次数，超过后永久跳过该文件（成功一次即清零）。`0` 表示永不因失败而跳过，失败文件每轮重试。 | `3` |
+| `failure_dir` | 失败隔离目录：文件失败次数达到 `failure_count` 上限后移入该目录（保持子目录结构），不再留在源目录。 | 不启用 |
 | `fallback_count` | 连续 FFmpeg 失败多少次后切换备用命令。仅当配置了 `ffmpeg_cmd_fallback` 时需要设置。 | `0`（不启用） |
 | `ffmpeg_timeout` | 单文件处理超时（秒），超时终止 FFmpeg 进程并按失败计数。 | `0`（不限） |
 
 ```toml
 failure_count = 3
+failure_dir = "./failed"
 
 ffmpeg_cmd_fallback = """
 -i {input} \
@@ -237,6 +239,8 @@ fallback_count = 3   # 主命令连续失败 3 次后启用备用命令（此后
 ```
 
 > 备用命令与主命令共用 `output_filename`，无需单独配置输出文件名。
+>
+> `failure_dir` 的约束：不得位于 `source_dir` / `dest_dir` 之内，不得与 `backup_dir` 相同；`failure_count = 0`（永不因失败跳过）时本项不生效。未配置 `failure_dir` 时，达到失败上限的文件永久留在源目录、不再处理。
 
 ### 第八步：多任务与依赖（可选）
 
