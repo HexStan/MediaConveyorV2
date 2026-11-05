@@ -792,25 +792,6 @@ class TestScanFiltering:
         warnings = [m for lv, m in ctx.logger.messages if lv == "warning" and "源目录不存在" in m]
         assert len(warnings) == 1
 
-    def test_idle_monitoring_logged_once_per_idle_streak(self, run_task, tmp_path, stub_ffmpeg):
-        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
-        make_tree(task["source_dir"], {})
-
-        run_task(task, now=NOW)
-        run_task(task, now=NOW)
-        ctx = AppContext.get()
-        idle_logs = [m for lv, m in ctx.logger.messages if lv == "info" and "继续监听" in m]
-        assert len(idle_logs) == 1
-
-        # 有文件处理后复位：再次空闲会重新提示
-        make_tree(task["source_dir"], {"a.srt": b"x"})
-        task2 = ffmpeg_task(task["source_dir"], task["dest_dir"], passthrough_patterns=["*"])
-        run_task(task2, now=NOW)
-        run_task(task, now=NOW)
-
-        idle_logs = [m for lv, m in ctx.logger.messages if lv == "info" and "继续监听" in m]
-        assert len(idle_logs) == 2
-
 
 # ============================================================
 # 稳定性与停止

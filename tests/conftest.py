@@ -73,14 +73,12 @@ def app_context(tmp_path, capture_log):
 
 @pytest.fixture(autouse=True)
 def _reset_handler_class_state():
-    """清理处理器的类级提示去重状态（源目录告警 / 监听提示），保证测试互不污染。"""
+    """清理处理器的类级提示去重状态（源目录告警），保证测试互不污染。"""
     from src.core.handlers.ffmpeg_task import FFmpegTaskHandler
 
     FFmpegTaskHandler._warned_dirs.clear()
-    FFmpegTaskHandler._monitoring_logged.clear()
     yield
     FFmpegTaskHandler._warned_dirs.clear()
-    FFmpegTaskHandler._monitoring_logged.clear()
 
 
 class FakePopen:

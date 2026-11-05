@@ -92,8 +92,6 @@ class FFmpegTaskHandler(BaseTaskHandler):
     # 源目录缺失的告警去重：处理器每轮重建，实例级集合没有记忆，
     # 用类级集合按目录去重（与 v1 Scanner._warned_dirs 语义一致）
     _warned_dirs: ClassVar[set[str]] = set()
-    # "继续监听"提示的去重：source_dir → 是否已提示；发现待处理文件即复位
-    _monitoring_logged: ClassVar[dict[str, bool]] = {}
 
     def __init__(self, spec: TaskSpec, now: float | None = None) -> None:
         super().__init__(spec, now)
@@ -123,14 +121,10 @@ class FFmpegTaskHandler(BaseTaskHandler):
             self._cleanup_expired(ctx, report.expired)
             self._evict_failed(ctx, report.evictions)
 
-            if not report.entries:
-                self._log_monitoring_idle(ctx)
-            else:
-                self._monitoring_logged.pop(config.source_dir, None)
-                for entry in report.entries:
-                    if ctx.lifecycle.should_stop_before_file():
-                        break
-                    self._handle_entry(ctx, entry)
+            for entry in report.entries:
+                if ctx.lifecycle.should_stop_before_file():
+                    break
+                self._handle_entry(ctx, entry)
         except TemplateFormatError as e:
             # 命令模板错误对所有文件必然复现，属配置级错误：
             # 中止本轮并给出明确报错，而不是把失败计数烧在每一个文件上
@@ -548,9 +542,3 @@ class FFmpegTaskHandler(BaseTaskHandler):
         if source not in FFmpegTaskHandler._warned_dirs:
             FFmpegTaskHandler._warned_dirs.add(source)
             ctx.logger.warning(f"源目录不存在: {source}")
-
-    def _log_monitoring_idle(self, ctx: AppContext) -> None:
-        source = self._config.source_dir
-        if not FFmpegTaskHandler._monitoring_logged.get(source):
-            FFmpegTaskHandler._monitoring_logged[source] = True
-            ctx.logger.info(f"未发现待处理文件，继续监听 {source}。")
