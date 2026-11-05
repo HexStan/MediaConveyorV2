@@ -3,8 +3,8 @@
 Popen 是进程边界允许打桩的接缝（tests/README.md 原则三，桩见 conftest
 的 stub_ffmpeg）：FakePopen 模拟 ffmpeg 的输出流（stderr 错误输出 +
 stdout progress 块）与退出码，钉死命令组装（模板填充与预置参数注入）、
-progress 块的解析渲染、终写/收尾时序、超时终止与 fast 中止的契约。
-FFmpeg 语义本身不测。
+progress 块的解析渲染、进度行节流与 end 终写时序、超时终止与 fast 中止
+的契约。FFmpeg 语义本身不测。
 """
 
 import subprocess
@@ -210,106 +210,90 @@ class TestFormatProgress:
         assert "持续时间：00:00:00" in format_progress(progress, elapsed=-1.0)
 
 
-class RecordingReporter:
-    """进度分发器替身：记录 update / finish / close 调用。"""
-
-    def __init__(self):
-        self.updates: list[str] = []
-        self.finished: list[str] = []
-        self.closed = False
-
-    def update(self, line):
-        self.updates.append(line)
-
-    def finish(self, line):
-        self.finished.append(line)
-
-    def close(self):
-        self.closed = True
-
-
 class TestRunFFmpeg:
-    def test_success_finishes_with_end_progress(self, stub_ffmpeg, capture_log):
+    def test_success_appends_end_progress_record(self, stub_ffmpeg, capture_log):
+        """成功结束：以 progress=end 快照追加一次终写状态行，无「运行报告」。"""
         _calls, state = stub_ffmpeg
         state["progress"] = _continue_block() + _end_block()
-        reporter = RecordingReporter()
 
-        coordinator = LifecycleCoordinator()
         ok = run_ffmpeg(
-            "ffmpeg cmd",
-            rel_path="a.mp4",
-            logger=capture_log,
-            coordinator=coordinator,
-            reporter=reporter,
+            "ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=LifecycleCoordinator()
         )
 
         assert ok is True
         assert capture_log.has("info", "FFmpeg 处理完成")
         # 运行报告行取消：终态由 progress=end 的终写进度行承载
         assert not any("运行报告" in m for _, m in capture_log.messages)
-        assert reporter.closed is False
-        assert len(reporter.finished) == 1
-        assert "【已完成】" in reporter.finished[0]
-        # 进行中的更新行不得混入终写状态
-        assert all("【已完成】" not in line for line in reporter.updates)
+        finished = [m for lv, m in capture_log.messages if lv == "info" and "【已完成】" in m]
+        assert len(finished) == 1
 
     def test_stderr_stats_lines_are_plain_error_output(self, stub_ffmpeg, capture_log):
         """-nostats 后 stderr 不再有进度语义：time=/speed= 行只是普通输出行。"""
         _calls, state = stub_ffmpeg
         state["output"] = b"time=00:00:01.00 speed=2.0x\r\n"
-        reporter = RecordingReporter()
 
         run_ffmpeg(
-            "ffmpeg cmd",
-            rel_path="a.mp4",
-            logger=capture_log,
-            coordinator=LifecycleCoordinator(),
-            reporter=reporter,
+            "ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=LifecycleCoordinator()
         )
 
         assert not capture_log.has("info", "FFmpeg 进度")
-        assert reporter.finished == [] and reporter.updates == []
+        assert not capture_log.has("info", "【进行中】")
+        assert not capture_log.has("info", "【已完成】")
 
-    def test_progress_updates_during_run(self, stub_ffmpeg, capture_log):
-        """执行期间持续以最新快照更新（计时器走动），异常结束不终写。"""
+    def test_progress_lines_throttled(self, stub_ffmpeg, capture_log):
+        """进行中行 30 秒节流：首块即落笔，其后毫秒级抵达的块被压制；异常结束不终写。"""
         _calls, state = stub_ffmpeg
         state["hangs"] = True
-        state["progress"] = _continue_block()
-        reporter = RecordingReporter()
+        state["progress"] = _continue_block() * 3
 
         ok = run_ffmpeg(
             "ffmpeg cmd",
             rel_path="a.mp4",
             logger=capture_log,
             coordinator=LifecycleCoordinator(),
-            timeout=0.2,
-            reporter=reporter,
+            timeout=0.3,
         )
 
         assert ok is False
         assert capture_log.has("error", "处理超时")
-        assert any("【进行中】" in line for line in reporter.updates)
-        assert reporter.finished == []
-        assert reporter.closed is True
+        progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "【进行中】" in m]
+        assert len(progress_logs) == 1
+        assert not capture_log.has("info", "【已完成】")
 
-    def test_failure_keeps_last_progress_and_closes(self, stub_ffmpeg, capture_log):
-        """命令失败（无 end 块）：不终写，最后一行进度原样保留。"""
+    def test_progress_lines_log_every_poll_when_throttle_disabled(
+        self, stub_ffmpeg, capture_log, monkeypatch
+    ):
+        """节流间隔归零（测试替身）：无新块也以最新快照落笔，计时器持续走动。"""
+        monkeypatch.setattr("src.core.media.ffmpeg._PROGRESS_LOG_INTERVAL", 0)
         _calls, state = stub_ffmpeg
-        state["returncode"] = 1
+        state["hangs"] = True
         state["progress"] = _continue_block()
-        reporter = RecordingReporter()
 
         ok = run_ffmpeg(
             "ffmpeg cmd",
             rel_path="a.mp4",
             logger=capture_log,
             coordinator=LifecycleCoordinator(),
-            reporter=reporter,
+            timeout=1.2,
         )
 
         assert ok is False
-        assert not reporter.finished
-        assert reporter.closed is True
+        progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "【进行中】" in m]
+        assert len(progress_logs) >= 2
+
+    def test_failure_appends_no_end_record(self, stub_ffmpeg, capture_log):
+        """命令失败（无 end 块）：不追加终写状态行，最后一行进度原样保留。"""
+        _calls, state = stub_ffmpeg
+        state["returncode"] = 1
+        state["progress"] = _continue_block()
+
+        ok = run_ffmpeg(
+            "ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=LifecycleCoordinator()
+        )
+
+        assert ok is False
+        assert capture_log.has("info", "【进行中】")
+        assert not capture_log.has("info", "【已完成】")
 
     def test_failure_logs_error_tail(self, stub_ffmpeg, capture_log):
         _calls, state = stub_ffmpeg
@@ -370,7 +354,6 @@ class TestRunFFmpeg:
         _calls, _state = stub_ffmpeg
         coordinator = LifecycleCoordinator()
         coordinator.request_abort()
-        reporter = RecordingReporter()
 
         with pytest.raises(TransferAbortedError):
             run_ffmpeg(
@@ -378,12 +361,11 @@ class TestRunFFmpeg:
                 rel_path="a.mp4",
                 logger=capture_log,
                 coordinator=coordinator,
-                reporter=reporter,
             )
 
         assert coordinator._children == []
-        assert not reporter.finished
-        assert reporter.closed is True
+        # 中止路径无 end 块：不追加终写状态行
+        assert not capture_log.has("info", "【已完成】")
 
     def test_popen_oserror_fails_gracefully(self, monkeypatch, capture_log):
         def boom(cmd, **kwargs):

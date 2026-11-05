@@ -48,9 +48,6 @@ class CaptureLogger:
     def critical(self, msg, **kwargs):
         self._log("critical", msg, **kwargs)
 
-    def progress_reporter(self):
-        """进度分发器替身：测试未显式注入时 run_ffmpeg 跳过进度输出。"""
-
     def has(self, level, substring):
         """是否存在包含指定子串的某级别日志。"""
         return any(lv == level and substring in m for lv, m in self.messages)

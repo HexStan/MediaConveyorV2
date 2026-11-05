@@ -2,10 +2,7 @@ import glob
 import logging
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol, TextIO, override
-
-if TYPE_CHECKING:
-    from src.output.progress import ProgressReporter
+from typing import Any, Protocol, override
 
 SUCCESS_LEVEL_NUM = 25
 logging.addLevelName(SUCCESS_LEVEL_NUM, "SUCCESS")
@@ -30,10 +27,6 @@ class Logger(Protocol):
 
     def critical(self, msg: str, raw: bool = False) -> None: ...
 
-    def progress_reporter(self) -> ProgressReporter | None:
-        """创建 FFmpeg 进度的多路输出分发器；无可用输出设施时返回 None。"""
-        ...
-
 
 class DualFormatter(logging.Formatter):
     """
@@ -53,40 +46,6 @@ class DualFormatter(logging.Formatter):
                 return f"{timestamp} {msg}"
             return msg
         return super().format(record)
-
-
-class _ProgressLineClearer(Protocol):
-    """TTY 进度行的清行接口（由 src.output.progress 的控制台 sink 实现）。
-
-    日志输出与 TTY 单行覆盖进度的协调契约：进度行在屏期间，日志 emit
-    前先清行，避免日志与进度行黏连。
-    """
-
-    def clear_line(self) -> None: ...
-
-
-class ConsoleLogHandler(logging.StreamHandler[TextIO]):
-    """控制台 handler：存在活动 TTY 进度行时，先清行再输出日志记录。
-
-    FFmpeg 进度在 TTY 上以 ``\\r`` 单行覆盖呈现（见 src.output.progress）；
-    期间其他线程输出的日志若直接追加会与进度行黏连。emit 前回调进度写入
-    方清行——handle() 已持有 handler 锁，清行与进度写入天然互斥，清行后
-    的进度行由其下一轮刷新重绘。清行失败不阻断日志输出。
-    """
-
-    def __init__(self, stream: TextIO | None = None) -> None:
-        super().__init__(stream)
-        self.progress_writer: _ProgressLineClearer | None = None
-
-    @override
-    def emit(self, record: logging.LogRecord) -> None:
-        writer = self.progress_writer
-        if writer is not None:
-            try:
-                writer.clear_line()
-            except Exception:  # noqa: BLE001, S110  清行失败不得影响日志本身，也无 logger 可用
-                pass
-        super().emit(record)
 
 
 class LoggerWrapper(Logger):
@@ -132,13 +91,6 @@ class LoggerWrapper(Logger):
     # 如果需要访问底层 logger 的其他方法（如 warning, debug），可以通过 getattr 委托
     def __getattr__(self, name: str) -> Any:
         return getattr(self._logger, name)
-
-    def progress_reporter(self) -> ProgressReporter | None:
-        """创建 FFmpeg 进度分发器：从自身 handler 抽取日志文件与控制台流。"""
-        # 延迟导入：progress.py 反向引用本模块的 handler 类型，避免运行期导入环
-        from src.output.progress import reporter_from_handlers
-
-        return reporter_from_handlers(self._logger.handlers)
 
 
 class DailyRotatingFileHandler(logging.FileHandler):
@@ -229,7 +181,7 @@ def setup_logger(
     # 同时输出到控制台（脱离终端运行的实例没有可用控制台，跳过）
     handlers: list[logging.Handler] = [file_handler]
     if console:
-        console_handler = ConsoleLogHandler()
+        console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
         handlers.append(console_handler)
 

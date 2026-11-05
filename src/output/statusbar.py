@@ -61,11 +61,8 @@ def _enable_windows_vt() -> bool:
     return bool(kernel32.SetConsoleMode(handle, mode.value | _ENABLE_VT_PROCESSING))
 
 
-def display_width(text: str) -> int:
-    """文本在终端上的显示宽度：全角/宽字符计 2，其余计 1。
-
-    公开给同包的进度输出复用：TTY 单行覆盖需按显示宽度补空格防残留。
-    """
+def _display_width(text: str) -> int:
+    """文本在终端上的显示宽度：全角/宽字符计 2，其余计 1。"""
     return sum(2 if unicodedata.east_asian_width(char) in ("F", "W") else 1 for char in text)
 
 
@@ -89,7 +86,7 @@ def _physical_rows(text: str, columns: int) -> int:
     """
     if columns <= 0:
         return 1
-    width = display_width(text)
+    width = _display_width(text)
     return max(1, (width + columns - 1) // columns)
 
 
@@ -249,15 +246,15 @@ class StatusBar:
             left = f"● 实例运行中 (PID {pid})"
         else:
             left = "● 实例运行中"
-        hint_width = display_width(_HINT)
+        hint_width = _display_width(_HINT)
         if columns <= hint_width:
             return _truncate(_HINT, columns)
         available = columns - hint_width - 1
-        if display_width(left) > available:
+        if _display_width(left) > available:
             # 窄终端兜底：截断左侧文本，保证整行（含 1 个分隔空格）不超
             # 列数——状态栏自身折行会在屏上留下第二行残留
             left = _truncate(left, available)
-        pad = columns - display_width(left) - hint_width
+        pad = columns - _display_width(left) - hint_width
         return f"{left}{' ' * pad}{_HINT}"
 
     def _write(self, text: str) -> None:

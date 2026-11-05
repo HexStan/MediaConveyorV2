@@ -15,13 +15,11 @@
 进度走 FFmpeg progress 协议：程序预置 -nostats 关闭 stderr 的周期
 stats 行、-progress pipe:1 让进度块写入 stdout。stdout 读取线程以
 progress= 行为块边界切块，主轮询循环把块解析为快照并渲染成中文进度行
-（format_progress），交 output 层的 ProgressReporter 分发——日志文件
-定宽原位覆盖（5 秒）、控制台 TTY 单行覆盖（1 秒）/ 非 TTY 追加（5 秒），
-落笔节奏与覆盖形态由 output 层负责。无新块时也以最新快照重渲染，计时器
-持续走动；progress=end 的快照在进程结束后终写一次（finish），异常结束
-（失败 / 超时 / fast 中止，不会有 end 块）只做终端行归还（close），最后
-一行进度原样保留。进度不再经 logger 输出，取消「FFmpeg 运行报告」行——
-终态由终写进度行承载。
+（format_progress）经 logger 输出——raw 模式落笔（不带时间戳头部），
+以 30 秒节流，无新块时也以最新快照渲染，计时器持续走动。progress=end
+的快照在进程结束后追加一次终写状态行（绕过节流），异常结束（失败 /
+超时 / fast 中止，不会有 end 块）不追加，最后一行进度原样保留。取消
+「FFmpeg 运行报告」行——终态由终写进度行承载。
 """
 
 import queue
@@ -35,11 +33,13 @@ from typing import TYPE_CHECKING
 from src.fs import TransferAbortedError
 from src.output.logger import Logger
 from src.output.presentation import fmt_size
-from src.output.progress import ProgressReporter
 from src.platform_info import is_windows
 
 if TYPE_CHECKING:
     from src.app.lifecycle import LifecycleCoordinator
+
+# 进度行日志的节流间隔（秒）
+_PROGRESS_LOG_INTERVAL = 30.0
 
 # 输出流轮询间隙：停止/超时检查与行消费的粒度
 _POLL_INTERVAL = 0.5
@@ -324,18 +324,15 @@ def run_ffmpeg(
     logger: Logger,
     coordinator: LifecycleCoordinator,
     timeout: float = 0,
-    reporter: ProgressReporter | None = None,
 ) -> bool:
     """执行拼接完成的 ffmpeg 命令；返回是否成功。
 
     - 停止：fast 中止信号到达时终止进程树并抛 TransferAbortedError；
     - 超时：timeout > 0 时超时终止进程树，按失败处理（返回 False）；
-    - 进度：progress 协议块解析渲染后交 reporter 分发（节流与覆盖形态
-      由 output 层决定）；progress=end 的快照在进程结束后终写一次，
-      异常结束（失败/超时/中止）不终写，最后一行进度原样保留。
+    - 进度：progress 协议块解析渲染后经 logger 输出（raw，不带时间戳
+      头部，30 秒节流）；progress=end 的快照在进程结束后追加一次终写
+      状态行，异常结束（失败/超时/中止）不追加，最后一行进度原样保留。
     """
-    if reporter is None:
-        reporter = logger.progress_reporter()
     start_time = time.time()
     try:
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -356,6 +353,7 @@ def run_ffmpeg(
     error_output: list[str] = []
     last_progress: FFmpegProgress | None = None
     finished_line: str | None = None  # progress=end 时刻的终写行
+    last_progress_log = 0.0
 
     try:
         while True:
@@ -366,10 +364,16 @@ def run_ffmpeg(
             last_progress, finished_line = _absorb_blocks(
                 blocks, last_progress, finished_line, start_time
             )
-            # 无新块也以最新快照重渲染：计时器持续走动；落笔节奏由
-            # reporter 的各 sink 节流；end 之后不再产生新的进度行
-            if reporter is not None and last_progress is not None and finished_line is None:
-                reporter.update(format_progress(last_progress, time.time() - start_time))
+            # 无新块也以最新快照渲染：计时器持续走动；落笔以 30 秒节流，
+            # end 之后不再产生新的进度行
+            now = time.time()
+            if (
+                last_progress is not None
+                and finished_line is None
+                and now - last_progress_log >= _PROGRESS_LOG_INTERVAL
+            ):
+                logger.info(format_progress(last_progress, now - start_time), raw=True)
+                last_progress_log = now
 
             try:
                 line = lines.get(timeout=_POLL_INTERVAL)
@@ -391,17 +395,15 @@ def run_ffmpeg(
             error_output.append(line)
     finally:
         coordinator.unregister_process(process)
-        if reporter is not None:
-            # end 块可能在进程退出与最后一次排空间才抵达：先收尾 stdout
-            # 读取线程并清空剩余块，再按有无 end 快照决定终写或异常收尾
-            progress_reader.join(timeout=_POLL_INTERVAL)
-            last_progress, finished_line = _absorb_blocks(
-                blocks, last_progress, finished_line, start_time
-            )
-            if finished_line is not None:
-                reporter.finish(finished_line)
-            else:
-                reporter.close()
+        # end 块可能在进程退出与最后一次排空间才抵达：先收尾 stdout 读取
+        # 线程并清空剩余块，再以 end 快照追加一次终写状态行（绕过节流）；
+        # 异常结束（失败/超时/中止）无 end 块，不追加，最后一行进度原样保留
+        progress_reader.join(timeout=_POLL_INTERVAL)
+        last_progress, finished_line = _absorb_blocks(
+            blocks, last_progress, finished_line, start_time
+        )
+        if finished_line is not None:
+            logger.info(finished_line, raw=True)
 
     process.wait()
     elapsed = time.time() - start_time
