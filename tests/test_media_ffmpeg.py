@@ -189,13 +189,13 @@ class TestFormatProgress:
         )
 
         assert format_progress(progress, elapsed=12.4, total_duration=8.4) == (
-            "进行中 | 持续时间：00:00:12 | 输出时间戳：00:00:04 | 当前帧：168 "
+            "进行中 | 持续时间：00:12 | 输出时间戳：00:04 | 当前帧：168 "
             "| 码率：512.3kbits/s | 体积：1.0 MiB | 帧率：42.13 | 速率：1.05x "
-            "| 复制帧：0 | 丢弃帧：0 | 预计还需：00:00:12"
+            "| 复制帧：0 | 丢弃帧：0 | 预计还需：00:12"
         )
 
     def test_end_state_and_missing_fields(self):
-        """end 汉化为已完成；N/A 与缺失字段统一为占位符；预计还需恒为 00:00:00。"""
+        """end 汉化为已完成；N/A 与缺失字段统一为占位符；预计还需恒为 00:00。"""
         progress = FFmpegProgress(
             progress="end",
             frame="",
@@ -209,8 +209,8 @@ class TestFormatProgress:
         )
 
         assert format_progress(progress, elapsed=0.4, total_duration=None) == (
-            "已完成 | 持续时间：00:00:00 | 输出时间戳：-- | 当前帧：-- | 码率：-- "
-            "| 体积：-- | 帧率：-- | 速率：-- | 复制帧：-- | 丢弃帧：-- | 预计还需：00:00:00"
+            "已完成 | 持续时间：00:00 | 输出时间戳：-- | 当前帧：-- | 码率：-- "
+            "| 体积：-- | 帧率：-- | 速率：-- | 复制帧：-- | 丢弃帧：-- | 预计还需：00:00"
         )
 
     def test_eta_placeholder_when_duration_unknown(self):
@@ -236,13 +236,30 @@ class TestFormatProgress:
 
         assert progress is not None
         line = format_progress(progress, elapsed=12.4, total_duration=4.2)
-        assert line.endswith("预计还需：00:00:00")
+        assert line.endswith("预计还需：00:00")
 
     def test_timer_clamps_negative_elapsed(self):
         progress = parse_progress_block(["progress=continue"])
 
         assert progress is not None
-        assert "持续时间：00:00:00" in format_progress(progress, elapsed=-1.0, total_duration=None)
+        assert "持续时间：00:00" in format_progress(progress, elapsed=-1.0, total_duration=None)
+
+    def test_minutes_unbounded_beyond_one_hour(self):
+        """分钟位不封顶：超过 1 小时不进位小时位，分钟照常累加（62:05）。"""
+        progress = parse_progress_block(["out_time=01:02:03.000000", "progress=continue"])
+
+        assert progress is not None
+        line = format_progress(progress, elapsed=3725.0, total_duration=None)
+        assert "持续时间：62:05" in line
+        assert "输出时间戳：62:03" in line
+
+    def test_out_time_negative_offset_keeps_sign(self):
+        """负起始偏移的 out_time：显示保留符号。"""
+        progress = parse_progress_block(["out_time=-00:00:00.020000", "progress=continue"])
+
+        assert progress is not None
+        line = format_progress(progress, elapsed=12.4, total_duration=None)
+        assert "输出时间戳：-00:00" in line
 
 
 class TestRunFFmpeg:
@@ -261,7 +278,7 @@ class TestRunFFmpeg:
         assert len(finished) == 1
 
     def test_end_record_carries_zero_eta(self, stub_ffmpeg, capture_log):
-        """终写行恒以预计还需：00:00:00 收尾（总时长是否在场不影响）。"""
+        """终写行恒以预计还需：00:00 收尾（总时长是否在场不影响）。"""
         _calls, state = stub_ffmpeg
         state["progress"] = _continue_block() + _end_block()
 
@@ -269,7 +286,7 @@ class TestRunFFmpeg:
 
         assert ok is True
         finished = next(m for lv, m in capture_log.messages if lv == "info" and "已完成" in m)
-        assert finished.endswith("预计还需：00:00:00")
+        assert finished.endswith("预计还需：00:00")
 
     def test_stderr_stats_lines_are_plain_error_output(self, stub_ffmpeg, capture_log):
         """-nostats 后 stderr 不再有进度语义：time=/speed= 行只是普通输出行。"""
@@ -340,7 +357,7 @@ class TestRunFFmpeg:
         progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "进行中" in m]
         assert progress_logs
         # 首拍可能先于横幅被消费而显示占位符，其后各拍必已解析到总时长
-        assert any(re.search(r"预计还需：\d{2}:\d{2}:\d{2}$", m) for m in progress_logs)
+        assert any(re.search(r"预计还需：\d{2,}:\d{2}$", m) for m in progress_logs)
 
     def test_failure_appends_no_end_record(self, stub_ffmpeg, capture_log):
         """命令失败（无 end 块）：不追加终写状态行，最后一行进度原样保留。"""
