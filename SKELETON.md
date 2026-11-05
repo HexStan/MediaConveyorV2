@@ -13,7 +13,7 @@
 | 骨架 | `main.py` | CLI 解析与分发 |
 | 骨架 | `src/app/` | 常驻调度循环与任务依赖编排（runtime）、start/log/stop/run-once 控制子命令（control）、单实例锁与跨进程控制通道（instance）、三级停止信号（lifecycle）、配置加载与热重载（config）、全局上下文（context）、运行时路径（paths） |
 | 骨架 | `src/fs/` | 本地文件 I/O 原语：原子写入、传输中止注入、扫描枚举、传输与删除、空目录清理 |
-| 骨架 | `src/output/` | 日志记录与轮转（logger）、日志跟随器（logtail）、终端状态栏（statusbar）、统一表现层（presentation）、FFmpeg 进度多路输出（progress） |
+| 骨架 | `src/output/` | 日志记录与轮转（logger）、日志跟随器（logtail）、终端状态栏（statusbar）、统一表现层（presentation） |
 | 骨架 | `src/platform_info.py` | 平台判定唯一入口 |
 | 骨架 + 领域适配 | `src/core/task_config.py` / `task_plan.py` / `types.py` | “TOML 配置 → 类型化任务 → 加载期静态校验 → 依赖编排”的解析框架与任务结果枚举来自骨架；任务字段、文件动作枚举值为领域定义 |
 | 骨架 + 领域适配 | `src/core/handlers/base.py` / `__init__.py` | 处理器基类与装配入口的模式来自骨架；模板方法编排细节为本项目实现 |
