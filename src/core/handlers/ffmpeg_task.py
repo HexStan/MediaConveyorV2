@@ -121,10 +121,11 @@ class FFmpegTaskHandler(BaseTaskHandler):
             self._cleanup_expired(ctx, report.expired)
             self._evict_failed(ctx, report.evictions)
 
-            for entry in report.entries:
+            total = len(report.entries)
+            for index, entry in enumerate(report.entries, start=1):
                 if ctx.lifecycle.should_stop_before_file():
                     break
-                self._handle_entry(ctx, entry)
+                self._handle_entry(ctx, entry, index, total)
         except TemplateFormatError as e:
             # 命令模板错误对所有文件必然复现，属配置级错误：
             # 中止本轮并给出明确报错，而不是把失败计数烧在每一个文件上
@@ -298,10 +299,10 @@ class FFmpegTaskHandler(BaseTaskHandler):
 
     # ---- 逐文件处理 -----------------------------------------------------
 
-    def _handle_entry(self, ctx: AppContext, entry: _ScanEntry) -> None:
+    def _handle_entry(self, ctx: AppContext, entry: _ScanEntry, index: int, total: int) -> None:
         # 流转路线的起点标记：此后的整条路线（稳定性检查 → 处理 → 善后）
         # 都不再重复输出文件路径
-        ctx.logger.info(f"准备处理: {entry.rel_path}")
+        ctx.logger.info(f"【{index}/{total}】准备处理: {entry.rel_path}")
         try:
             if not self._check_stable(ctx, entry):
                 return
