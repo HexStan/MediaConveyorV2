@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 
 from src.fs import TransferAbortedError
 from src.output.logger import Logger
-from src.output.presentation import fmt_size
+from src.output.presentation import fmt_size, fmt_timespan
 from src.platform_info import is_windows
 
 if TYPE_CHECKING:
@@ -495,7 +495,7 @@ def run_ffmpeg(
         return False
 
     if process.returncode == 0:
-        logger.info(f"FFmpeg 处理完成，耗时 {elapsed:.1f} 秒。")
+        logger.info(f"FFmpeg 处理完成，耗时 {fmt_timespan(elapsed)}。")
         return True
 
     _log_error_tail(error_output, logger)
