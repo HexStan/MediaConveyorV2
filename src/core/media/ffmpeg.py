@@ -16,11 +16,12 @@
 stats 行、-progress pipe:1 让进度块写入 stdout。stdout 读取线程以
 progress= 行为块边界切块，主轮询循环把块解析为快照并渲染成中文进度行
 （format_progress）经 logger 输出——raw 模式落笔（不带时间戳头部），
-以 30 秒节流，无新块时也以最新快照渲染，计时器持续走动。行末的
-「预计还需」以平均速率法估算剩余墙钟时间：媒体总时长取自 stderr 启动
-横幅的 Duration 行（首个可解析者生效），未知（横幅缺失、模板含
--hide_banner、管道输入等）时退化为占位符；横幅为完整输入时长，模板含
--ss / -t 裁剪时估算偏大（见 _format_eta）。progress=end 的快照在进程
+以 30 秒节流，无新块时也以最新快照渲染，计时器持续走动。输出时间戳
+以「out_time / 总时长」两段显示，行末的「预计还需」以平均速率法估算
+剩余墙钟时间；媒体总时长取自 stderr 启动横幅的 Duration 行（首个
+可解析者生效），未知（横幅缺失、模板含 -hide_banner、管道输入等）
+时退化为占位符；横幅为完整输入时长，模板含 -ss / -t 裁剪时分母与
+估算偏大（见 _format_eta）。progress=end 的快照在进程
 结束后追加一次终写状态行（绕过节流），异常结束（失败 / 超时 / fast
 中止，不会有 end 块）不追加，最后一行进度原样保留。取消「FFmpeg 运行
 报告」行——终态由终写进度行承载。
@@ -224,6 +225,13 @@ def _format_out_time(out_time: str) -> str:
     return f"{sign}{minutes:02d}:{secs:02d}"
 
 
+def _format_duration(seconds: float | None) -> str:
+    """媒体总时长：秒 → MM:SS（分钟位不封顶）；未知或非正数为占位符。"""
+    if seconds is None or seconds <= 0:
+        return _PROGRESS_PLACEHOLDER
+    return _format_timer(seconds)
+
+
 def _parse_hhmmss(value: str) -> float | None:
     """``[-]HH:MM:SS[.小数]`` 时间戳 → 秒；N/A、空串或形状不符返回 None。
 
@@ -283,7 +291,8 @@ def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: fl
     """渲染中文进度行（三种输出形态共用的唯一格式，见模块 docstring）。
 
     total_duration 为 run_ffmpeg 从 stderr 启动横幅解析出的媒体总时长
-    （秒），供行末「预计还需」字段估算，见 _format_eta。
+    （秒）：作为输出时间戳的分母显示（未知为占位符），并供行末
+    「预计还需」字段估算，见 _format_eta。
     """
     size = (
         fmt_size(progress.total_size, binary=True)
@@ -294,7 +303,7 @@ def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: fl
     fields = [
         state,
         f"持续时间：{_format_timer(elapsed)}",
-        f"输出时间戳：{_format_out_time(progress.out_time)}",
+        f"输出时间戳：{_format_out_time(progress.out_time)} / {_format_duration(total_duration)}",
         f"当前帧：{progress.frame or _PROGRESS_PLACEHOLDER}",
         f"码率：{progress.bitrate or _PROGRESS_PLACEHOLDER}",
         f"体积：{size}",
@@ -403,9 +412,10 @@ def run_ffmpeg(
       中止在场时无论返回码一律按中止处理，不进入成功/失败分支；
     - 超时：timeout > 0 时超时终止进程树，按失败处理（返回 False）；
     - 进度：progress 协议块解析渲染后经 logger 输出（raw，不带时间戳
-      头部，30 秒节流，行末「预计还需」以 stderr 启动横幅解析的媒体
-      总时长估算）；progress=end 的快照在进程结束后追加一次终写
-      状态行，异常结束（失败/超时/中止）不追加，最后一行进度原样保留。
+      头部，30 秒节流，输出时间戳的分母与行末「预计还需」的估算均以
+      stderr 启动横幅解析的媒体总时长为准）；progress=end 的快照在
+      进程结束后追加一次终写状态行，异常结束（失败/超时/中止）不
+      追加，最后一行进度原样保留。
     """
     start_time = time.time()
     try:

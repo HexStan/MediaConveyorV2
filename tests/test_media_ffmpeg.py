@@ -189,7 +189,7 @@ class TestFormatProgress:
         )
 
         assert format_progress(progress, elapsed=12.4, total_duration=8.4) == (
-            "进行中 | 持续时间：00:12 | 输出时间戳：00:04 | 当前帧：168 "
+            "进行中 | 持续时间：00:12 | 输出时间戳：00:04 / 00:08 | 当前帧：168 "
             "| 码率：512.3kbits/s | 体积：1.0 MiB | 帧率：42.13 | 速率：1.05x "
             "| 复制帧：0 | 丢弃帧：0 | 预计还需：00:12"
         )
@@ -209,7 +209,7 @@ class TestFormatProgress:
         )
 
         assert format_progress(progress, elapsed=0.4, total_duration=None) == (
-            "已完成 | 持续时间：00:00 | 输出时间戳：-- | 当前帧：-- | 码率：-- "
+            "已完成 | 持续时间：00:00 | 输出时间戳：-- / -- | 当前帧：-- | 码率：-- "
             "| 体积：-- | 帧率：-- | 速率：-- | 复制帧：-- | 丢弃帧：-- | 预计还需：00:00"
         )
 
@@ -251,7 +251,15 @@ class TestFormatProgress:
         assert progress is not None
         line = format_progress(progress, elapsed=3725.0, total_duration=None)
         assert "持续时间：62:05" in line
-        assert "输出时间戳：62:03" in line
+        assert "输出时间戳：62:03 / --" in line
+
+    def test_total_duration_beyond_one_hour(self):
+        """总时长同样分钟位不封顶：作为输出时间戳的分母显示。"""
+        progress = parse_progress_block(["out_time=00:30:00.000000", "progress=continue"])
+
+        assert progress is not None
+        line = format_progress(progress, elapsed=60.0, total_duration=3725.0)
+        assert "输出时间戳：30:00 / 62:05" in line
 
     def test_out_time_negative_offset_keeps_sign(self):
         """负起始偏移的 out_time：显示保留符号。"""
@@ -259,7 +267,7 @@ class TestFormatProgress:
 
         assert progress is not None
         line = format_progress(progress, elapsed=12.4, total_duration=None)
-        assert "输出时间戳：-00:00" in line
+        assert "输出时间戳：-00:00 / --" in line
 
 
 class TestRunFFmpeg:
@@ -358,6 +366,7 @@ class TestRunFFmpeg:
         assert progress_logs
         # 首拍可能先于横幅被消费而显示占位符，其后各拍必已解析到总时长
         assert any(re.search(r"预计还需：\d{2,}:\d{2}$", m) for m in progress_logs)
+        assert any(re.search(r"输出时间戳：\d{2,}:\d{2} / \d{2,}:\d{2}", m) for m in progress_logs)
 
     def test_failure_appends_no_end_record(self, stub_ffmpeg, capture_log):
         """命令失败（无 end 块）：不追加终写状态行，最后一行进度原样保留。"""

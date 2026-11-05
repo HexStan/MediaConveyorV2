@@ -53,7 +53,7 @@ from src.fs import (
     move_file,
 )
 from src.fs import delete_file as _fs_delete_file
-from src.output.presentation import fmt_timespan, print_task_summary
+from src.output.presentation import print_task_summary
 
 # 稳定性检查睡眠的分片粒度（秒）：分片间响应 fast 停止
 _STABLE_SLEEP_SLICE = 0.5
@@ -403,11 +403,10 @@ class FFmpegTaskHandler(BaseTaskHandler):
             and state.get_ffmpeg_failure_count(self._key, fkey) >= config.fallback_count
         )
         template = config.ffmpeg_cmd_fallback if use_fallback else config.ffmpeg_cmd
-        duration_note = self._duration_note(entry)
         if use_fallback:
-            ctx.logger.info(f"正在切换备用参数来调用 FFmpeg 处理文件{duration_note}。")
+            ctx.logger.info("正在切换备用参数来调用 FFmpeg 处理文件……")
         else:
-            ctx.logger.info(f"正在调用 FFmpeg 处理文件{duration_note}。")
+            ctx.logger.info("正在调用 FFmpeg 处理文件……")
 
         cmd = build_command(template, entry.filepath, part_output_path)
         ctx.logger.debug(f"执行 FFmpeg 命令: {cmd}")
@@ -471,15 +470,6 @@ class FFmpegTaskHandler(BaseTaskHandler):
             return False
         ctx.logger.debug(f"输出文件已就位: {dst_path}")
         return True
-
-    def _duration_note(self, entry: _ScanEntry) -> str:
-        """日志中的媒体时长注记；未探测到时长时省略（不做二次 ffprobe）。"""
-        if entry.media_info is None:
-            return ""
-        duration = entry.media_info["duration"]
-        if duration <= 0:
-            return ""
-        return f"，媒体时长 {fmt_timespan(duration)}"
 
     def _handle_success(
         self, ctx: AppContext, entry: _ScanEntry, rel_dir: str, filename: str
