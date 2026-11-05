@@ -16,10 +16,14 @@
 stats 行、-progress pipe:1 让进度块写入 stdout。stdout 读取线程以
 progress= 行为块边界切块，主轮询循环把块解析为快照并渲染成中文进度行
 （format_progress）经 logger 输出——raw 模式落笔（不带时间戳头部），
-以 30 秒节流，无新块时也以最新快照渲染，计时器持续走动。progress=end
-的快照在进程结束后追加一次终写状态行（绕过节流），异常结束（失败 /
-超时 / fast 中止，不会有 end 块）不追加，最后一行进度原样保留。取消
-「FFmpeg 运行报告」行——终态由终写进度行承载。
+以 30 秒节流，无新块时也以最新快照渲染，计时器持续走动。行末的
+「预计还需」以平均速率法估算剩余墙钟时间：媒体总时长取自 stderr 启动
+横幅的 Duration 行（首个可解析者生效），未知（横幅缺失、模板含
+-hide_banner、管道输入等）时退化为占位符；横幅为完整输入时长，模板含
+-ss / -t 裁剪时估算偏大（见 _format_eta）。progress=end 的快照在进程
+结束后追加一次终写状态行（绕过节流），异常结束（失败 / 超时 / fast
+中止，不会有 end 块）不追加，最后一行进度原样保留。取消「FFmpeg 运行
+报告」行——终态由终写进度行承载。
 """
 
 import queue
@@ -215,14 +219,75 @@ def _format_out_time(out_time: str) -> str:
     return out_time if cut < 0 else out_time[:cut]
 
 
-def format_progress(progress: FFmpegProgress, elapsed: float) -> str:
-    """渲染中文进度行（三种输出形态共用的唯一格式，见模块 docstring）。"""
+def _parse_hhmmss(value: str) -> float | None:
+    """``[-]HH:MM:SS[.小数]`` 时间戳 → 秒；N/A、空串或形状不符返回 None。
+
+    progress 协议的 out_time（微秒小数）与启动横幅的 Duration（百分秒
+    小数）共用此解析；小时位不限两位宽度，负号保留为负值（负起始偏移
+    的 out_time，如 -00:00:00.020000）。
+    """
+    text = value.strip()
+    sign = -1.0 if text.startswith("-") else 1.0
+    parts = text.removeprefix("-").split(":")
+    if len(parts) != 3 or not all(parts):
+        return None
+    try:
+        seconds_total = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+    except ValueError:
+        return None
+    return sign * seconds_total
+
+
+# ffmpeg 启动横幅的时长行前缀（stderr 行经读取线程 strip，无前导空白）：
+# Duration: 00:05:23.42, start: 0.000000, bitrate: 8543 kb/s
+_DURATION_PREFIX = "Duration: "
+
+
+def _parse_banner_duration(line: str) -> float | None:
+    """从 ffmpeg 启动横幅行解析输入媒体时长（秒）；非时长行或 N/A 返回 None。
+
+    多输入命令存在多条时长行时取首个可解析值（通常即主媒体输入）。
+    """
+    if not line.startswith(_DURATION_PREFIX):
+        return None
+    value = line[len(_DURATION_PREFIX) :].split(",", 1)[0]
+    seconds = _parse_hhmmss(value)
+    return seconds if seconds is not None and seconds > 0 else None
+
+
+def _format_eta(progress: FFmpegProgress, elapsed: float, total_duration: float | None) -> str:
+    """预计还需：按开局以来的平均处理速率推算剩余墙钟时间（恒 HH:MM:SS）。
+
+    平均速率 = 已处理媒体时长（out_time）÷ 已运行墙钟时间，恒以累计值
+    计算：不依赖 ffmpeg speed 字段的版本语义（瞬时 / 累计不一），30 秒
+    渲染节流下数值平滑。end 快照恒为 00:00:00；已处理时长尚未产出
+    （out_time 缺失 / 为 0 / 为负）或总时长未知时以占位符表示。
+    """
+    if progress.progress == "end":
+        return _format_timer(0)
+    out_seconds = _parse_hhmmss(progress.out_time)
+    if out_seconds is None or out_seconds <= 0:
+        return _PROGRESS_PLACEHOLDER
+    if total_duration is None or total_duration <= 0:
+        return _PROGRESS_PLACEHOLDER
+    remaining = max(0.0, total_duration - out_seconds)
+    return _format_timer(elapsed * remaining / out_seconds)
+
+
+def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: float | None) -> str:
+    """渲染中文进度行（三种输出形态共用的唯一格式，见模块 docstring）。
+
+    total_duration 为 run_ffmpeg 从 stderr 启动横幅解析出的媒体总时长
+    （秒），供行末「预计还需」字段估算，见 _format_eta。
+    """
     size = (
         fmt_size(progress.total_size, binary=True)
         if progress.total_size is not None
         else _PROGRESS_PLACEHOLDER
     )
+    state = _PROGRESS_STATE.get(progress.progress, progress.progress)
     fields = [
+        state,
         f"持续时间：{_format_timer(elapsed)}",
         f"输出时间戳：{_format_out_time(progress.out_time)}",
         f"当前帧：{progress.frame or _PROGRESS_PLACEHOLDER}",
@@ -232,9 +297,9 @@ def format_progress(progress: FFmpegProgress, elapsed: float) -> str:
         f"速率：{progress.speed or _PROGRESS_PLACEHOLDER}",
         f"复制帧：{progress.dup_frames or _PROGRESS_PLACEHOLDER}",
         f"丢弃帧：{progress.drop_frames or _PROGRESS_PLACEHOLDER}",
+        f"预计还需：{_format_eta(progress, elapsed, total_duration)}",
     ]
-    state = _PROGRESS_STATE.get(progress.progress, progress.progress)
-    return f"【{state}】 " + " | ".join(fields)
+    return " | ".join(fields)
 
 
 def _consume_stderr(process: subprocess.Popen[str], lines: queue.Queue[str]) -> None:
@@ -299,6 +364,7 @@ def _absorb_blocks(
     last_progress: FFmpegProgress | None,
     finished_line: str | None,
     start_time: float,
+    total_duration: float | None,
 ) -> tuple[FFmpegProgress | None, str | None]:
     """消费队列中就绪的 progress 块；返回 (最新快照, end 终写行)。
 
@@ -314,7 +380,7 @@ def _absorb_blocks(
             continue
         last_progress = parsed
         if parsed.progress == "end" and finished_line is None:
-            finished_line = format_progress(parsed, time.time() - start_time)
+            finished_line = format_progress(parsed, time.time() - start_time, total_duration)
 
 
 def run_ffmpeg(
@@ -332,7 +398,8 @@ def run_ffmpeg(
       中止在场时无论返回码一律按中止处理，不进入成功/失败分支；
     - 超时：timeout > 0 时超时终止进程树，按失败处理（返回 False）；
     - 进度：progress 协议块解析渲染后经 logger 输出（raw，不带时间戳
-      头部，30 秒节流）；progress=end 的快照在进程结束后追加一次终写
+      头部，30 秒节流，行末「预计还需」以 stderr 启动横幅解析的媒体
+      总时长估算）；progress=end 的快照在进程结束后追加一次终写
       状态行，异常结束（失败/超时/中止）不追加，最后一行进度原样保留。
     """
     start_time = time.time()
@@ -356,6 +423,7 @@ def run_ffmpeg(
     last_progress: FFmpegProgress | None = None
     finished_line: str | None = None  # progress=end 时刻的终写行
     last_progress_log = 0.0
+    total_duration: float | None = None  # stderr 启动横幅解析出的媒体总时长（秒）
 
     try:
         while True:
@@ -364,7 +432,7 @@ def run_ffmpeg(
                 raise TransferAbortedError()
 
             last_progress, finished_line = _absorb_blocks(
-                blocks, last_progress, finished_line, start_time
+                blocks, last_progress, finished_line, start_time, total_duration
             )
             # 无新块也以最新快照渲染：计时器持续走动；落笔以 30 秒节流，
             # end 之后不再产生新的进度行
@@ -374,7 +442,9 @@ def run_ffmpeg(
                 and finished_line is None
                 and now - last_progress_log >= _PROGRESS_LOG_INTERVAL
             ):
-                logger.info(format_progress(last_progress, now - start_time), raw=True)
+                logger.info(
+                    format_progress(last_progress, now - start_time, total_duration), raw=True
+                )
                 last_progress_log = now
 
             try:
@@ -395,6 +465,9 @@ def run_ffmpeg(
                 continue
 
             error_output.append(line)
+            # 横幅嗅探是被动的：时长行仍原样进错误缓冲，失败尾部报告不受影响
+            if total_duration is None:
+                total_duration = _parse_banner_duration(line)
     finally:
         coordinator.unregister_process(process)
         # end 块可能在进程退出与最后一次排空间才抵达：先收尾 stdout 读取
@@ -402,7 +475,7 @@ def run_ffmpeg(
         # 异常结束（失败/超时/中止）无 end 块，不追加，最后一行进度原样保留
         progress_reader.join(timeout=_POLL_INTERVAL)
         last_progress, finished_line = _absorb_blocks(
-            blocks, last_progress, finished_line, start_time
+            blocks, last_progress, finished_line, start_time, total_duration
         )
         if finished_line is not None:
             logger.info(finished_line, raw=True)

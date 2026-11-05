@@ -8,6 +8,7 @@ progress 块的解析渲染、进度行节流与 end 终写时序、超时终止
 """
 
 import io
+import re
 import subprocess
 import sys
 
@@ -119,6 +120,14 @@ def _end_block() -> bytes:
     )
 
 
+def _banner_output() -> bytes:
+    """ffmpeg 启动横幅的 stderr 形状（Input 头 + Duration 行）。"""
+    return (
+        b"Input #0, mov,mp4,m4a,3gp,3gpp,mj2, from 'input.mp4':\n"
+        b"  Duration: 00:00:08.40, start: 0.000000, bitrate: 8543 kb/s\n"
+    )
+
+
 class TestParseProgressBlock:
     def test_full_block(self):
         progress = parse_progress_block(
@@ -179,14 +188,14 @@ class TestFormatProgress:
             speed="1.05x",
         )
 
-        assert format_progress(progress, elapsed=12.4) == (
-            "【进行中】 持续时间：00:00:12 | 输出时间戳：00:00:04 | 当前帧：168 "
+        assert format_progress(progress, elapsed=12.4, total_duration=8.4) == (
+            "进行中 | 持续时间：00:00:12 | 输出时间戳：00:00:04 | 当前帧：168 "
             "| 码率：512.3kbits/s | 体积：1.0 MiB | 帧率：42.13 | 速率：1.05x "
-            "| 复制帧：0 | 丢弃帧：0"
+            "| 复制帧：0 | 丢弃帧：0 | 预计还需：00:00:12"
         )
 
     def test_end_state_and_missing_fields(self):
-        """end 汉化为已完成；N/A 与缺失字段统一为占位符。"""
+        """end 汉化为已完成；N/A 与缺失字段统一为占位符；预计还需恒为 00:00:00。"""
         progress = FFmpegProgress(
             progress="end",
             frame="",
@@ -199,16 +208,41 @@ class TestFormatProgress:
             speed="",
         )
 
-        assert format_progress(progress, elapsed=0.4) == (
-            "【已完成】 持续时间：00:00:00 | 输出时间戳：-- | 当前帧：-- | 码率：-- "
-            "| 体积：-- | 帧率：-- | 速率：-- | 复制帧：-- | 丢弃帧：--"
+        assert format_progress(progress, elapsed=0.4, total_duration=None) == (
+            "已完成 | 持续时间：00:00:00 | 输出时间戳：-- | 当前帧：-- | 码率：-- "
+            "| 体积：-- | 帧率：-- | 速率：-- | 复制帧：-- | 丢弃帧：-- | 预计还需：00:00:00"
         )
+
+    def test_eta_placeholder_when_duration_unknown(self):
+        """总时长未知（启动横幅未解析到）：预计还需为占位符。"""
+        progress = parse_progress_block(["out_time=00:00:04.200000", "progress=continue"])
+
+        assert progress is not None
+        line = format_progress(progress, elapsed=12.4, total_duration=None)
+        assert line.endswith("预计还需：--")
+
+    def test_eta_placeholder_before_first_output(self):
+        """out_time 尚未产出（缺失 / N/A / 为零 / 负起始偏移）：占位符。"""
+        for out_time in ("", "N/A", "00:00:00.000000", "-00:00:00.020000"):
+            progress = parse_progress_block([f"out_time={out_time}", "progress=continue"])
+
+            assert progress is not None
+            line = format_progress(progress, elapsed=12.4, total_duration=8.4)
+            assert line.endswith("预计还需：--"), out_time
+
+    def test_eta_clamps_to_zero_when_out_time_exceeds_duration(self):
+        """out_time 超过总时长（非零起始偏移等）：剩余钳为 0。"""
+        progress = parse_progress_block(["out_time=00:00:08.400000", "progress=continue"])
+
+        assert progress is not None
+        line = format_progress(progress, elapsed=12.4, total_duration=4.2)
+        assert line.endswith("预计还需：00:00:00")
 
     def test_timer_clamps_negative_elapsed(self):
         progress = parse_progress_block(["progress=continue"])
 
         assert progress is not None
-        assert "持续时间：00:00:00" in format_progress(progress, elapsed=-1.0)
+        assert "持续时间：00:00:00" in format_progress(progress, elapsed=-1.0, total_duration=None)
 
 
 class TestRunFFmpeg:
@@ -223,8 +257,19 @@ class TestRunFFmpeg:
         assert capture_log.has("info", "FFmpeg 处理完成")
         # 运行报告行取消：终态由 progress=end 的终写进度行承载
         assert not any("运行报告" in m for _, m in capture_log.messages)
-        finished = [m for lv, m in capture_log.messages if lv == "info" and "【已完成】" in m]
+        finished = [m for lv, m in capture_log.messages if lv == "info" and "已完成" in m]
         assert len(finished) == 1
+
+    def test_end_record_carries_zero_eta(self, stub_ffmpeg, capture_log):
+        """终写行恒以预计还需：00:00:00 收尾（总时长是否在场不影响）。"""
+        _calls, state = stub_ffmpeg
+        state["progress"] = _continue_block() + _end_block()
+
+        ok = run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=LifecycleCoordinator())
+
+        assert ok is True
+        finished = next(m for lv, m in capture_log.messages if lv == "info" and "已完成" in m)
+        assert finished.endswith("预计还需：00:00:00")
 
     def test_stderr_stats_lines_are_plain_error_output(self, stub_ffmpeg, capture_log):
         """-nostats 后 stderr 不再有进度语义：time=/speed= 行只是普通输出行。"""
@@ -234,8 +279,8 @@ class TestRunFFmpeg:
         run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=LifecycleCoordinator())
 
         assert not capture_log.has("info", "FFmpeg 进度")
-        assert not capture_log.has("info", "【进行中】")
-        assert not capture_log.has("info", "【已完成】")
+        assert not capture_log.has("info", "进行中")
+        assert not capture_log.has("info", "已完成")
 
     def test_progress_lines_throttled(self, stub_ffmpeg, capture_log):
         """进行中行 30 秒节流：首块即落笔，其后毫秒级抵达的块被压制；异常结束不终写。"""
@@ -252,9 +297,9 @@ class TestRunFFmpeg:
 
         assert ok is False
         assert capture_log.has("error", "处理时长超出")
-        progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "【进行中】" in m]
+        progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "进行中" in m]
         assert len(progress_logs) == 1
-        assert not capture_log.has("info", "【已完成】")
+        assert not capture_log.has("info", "已完成")
 
     def test_progress_lines_log_every_poll_when_throttle_disabled(
         self, stub_ffmpeg, capture_log, monkeypatch
@@ -273,8 +318,29 @@ class TestRunFFmpeg:
         )
 
         assert ok is False
-        progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "【进行中】" in m]
+        progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "进行中" in m]
         assert len(progress_logs) >= 2
+
+    def test_banner_duration_feeds_eta(self, stub_ffmpeg, capture_log, monkeypatch):
+        """stderr 启动横幅的 Duration 行被嗅探为总时长，进度行末尾估算预计还需。"""
+        monkeypatch.setattr("src.core.media.ffmpeg._PROGRESS_LOG_INTERVAL", 0)
+        _calls, state = stub_ffmpeg
+        state["hangs"] = True
+        state["output"] = _banner_output()
+        state["progress"] = _continue_block()
+
+        ok = run_ffmpeg(
+            "ffmpeg cmd",
+            logger=capture_log,
+            coordinator=LifecycleCoordinator(),
+            timeout=0.3,
+        )
+
+        assert ok is False
+        progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "进行中" in m]
+        assert progress_logs
+        # 首拍可能先于横幅被消费而显示占位符，其后各拍必已解析到总时长
+        assert any(re.search(r"预计还需：\d{2}:\d{2}:\d{2}$", m) for m in progress_logs)
 
     def test_failure_appends_no_end_record(self, stub_ffmpeg, capture_log):
         """命令失败（无 end 块）：不追加终写状态行，最后一行进度原样保留。"""
@@ -285,8 +351,8 @@ class TestRunFFmpeg:
         ok = run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=LifecycleCoordinator())
 
         assert ok is False
-        assert capture_log.has("info", "【进行中】")
-        assert not capture_log.has("info", "【已完成】")
+        assert capture_log.has("info", "进行中")
+        assert not capture_log.has("info", "已完成")
 
     def test_failure_logs_error_tail(self, stub_ffmpeg, capture_log):
         _calls, state = stub_ffmpeg
@@ -301,6 +367,18 @@ class TestRunFFmpeg:
         error_msg = next(m for lv, m in capture_log.messages if lv == "error")
         assert "line 29" in error_msg
         assert "line 5" not in error_msg
+
+    def test_banner_lines_stay_in_error_tail(self, stub_ffmpeg, capture_log):
+        """横幅嗅探是被动的：Duration 行仍原样保留在错误尾部输出中。"""
+        _calls, state = stub_ffmpeg
+        state["returncode"] = 1
+        state["output"] = _banner_output() + b"Invalid data found when processing input\n"
+
+        ok = run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=LifecycleCoordinator())
+
+        assert ok is False
+        error_msg = next(m for lv, m in capture_log.messages if lv == "error")
+        assert "Duration: 00:00:08.40" in error_msg
 
     def test_process_registered_during_run(self, stub_ffmpeg, capture_log):
         """子进程在执行期间登记到协调器，结束后摘除（fast 停止整树终止的前提）。"""
@@ -355,7 +433,7 @@ class TestRunFFmpeg:
 
         assert coordinator._children == []
         # 中止路径无 end 块：不追加终写状态行
-        assert not capture_log.has("info", "【已完成】")
+        assert not capture_log.has("info", "已完成")
 
     @pytest.mark.parametrize("returncode", [0, -15, 255])
     def test_abort_beats_returncode_at_final_gate(
