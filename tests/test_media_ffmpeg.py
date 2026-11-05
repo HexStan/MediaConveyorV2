@@ -7,6 +7,7 @@ progress 块的解析渲染、进度行节流与 end 终写时序、超时终止
 的契约。FFmpeg 语义本身不测。
 """
 
+import io
 import subprocess
 import sys
 
@@ -355,6 +356,44 @@ class TestRunFFmpeg:
         assert coordinator._children == []
         # 中止路径无 end 块：不追加终写状态行
         assert not capture_log.has("info", "【已完成】")
+
+    @pytest.mark.parametrize("returncode", [0, -15, 255])
+    def test_abort_beats_returncode_at_final_gate(
+        self, stub_ffmpeg, capture_log, monkeypatch, returncode
+    ):
+        """收尾终审：中止在场时返回码不作数。
+
+        rc=0 复现 POSIX 竞态——子进程被 psutil 终止并回收后，Popen 的
+        waitpid 命中 ECHILD，subprocess 会把返回码映射为 0；rc=-15/255
+        是未被回收时的真实被杀退出码。两者都不得定性为成功或失败。
+        """
+        _calls, _state = stub_ffmpeg
+        coordinator = LifecycleCoordinator()
+
+        class ReapedPopen:
+            def __init__(self):
+                self.stderr = io.BytesIO(b"")
+                self.stdout = io.BytesIO(b"")
+                self.pid = 4321
+                self.returncode = returncode
+
+            def poll(self):
+                # 中止在主循环轮询间隙落地、子进程被外部终止并回收：
+                # 循环顶部的中止检查已错过，只剩收尾处可拦截
+                coordinator.request_abort()
+                return self.returncode
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kwargs: ReapedPopen())
+
+        with pytest.raises(TransferAbortedError):
+            run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=coordinator)
+
+        assert not capture_log.has("info", "处理完成")
+        assert not capture_log.has("error", "FFmpeg 处理失败")
+        assert coordinator._children == []
 
     def test_popen_oserror_fails_gracefully(self, monkeypatch, capture_log):
         def boom(cmd, **kwargs):

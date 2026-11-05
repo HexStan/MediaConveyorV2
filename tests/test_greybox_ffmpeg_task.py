@@ -6,7 +6,9 @@ FFmpeg 以进程边界打桩（stub_ffmpeg）：同步语义本身不测，只�
 善后与状态流转。
 """
 
+import io
 import os
+import subprocess
 
 import pytest
 
@@ -611,6 +613,53 @@ class TestPartFileLifecycle:
 
         assert not os.path.exists(os.path.join(task["dest_dir"], ".mc-ffmpeg-part.a-encoded.mp4"))
         assert snapshot(task["source_dir"]) == {"a.mp4": 5}
+
+    def test_abort_race_does_not_publish_part_file(
+        self, run_task, tmp_path, stub_ffmpeg, monkeypatch
+    ):
+        """中止在 FFmpeg 运行中落地且子进程被回收（返回码被映射为 0）：
+        收尾终审以中止为准——产物不发布、源文件留守、part 清理、不烧计数。"""
+        _calls, _fstate = stub_ffmpeg
+        coordinator = AppContext.get().lifecycle
+
+        def reaped_popen(cmd, **kwargs):
+            dest = os.path.join(str(tmp_path), "dest")
+            os.makedirs(dest, exist_ok=True)
+            with open(os.path.join(dest, ".mc-ffmpeg-part.a-encoded.mp4"), "wb") as f:
+                f.write(b"partial")
+
+            class ReapedPopen:
+                def __init__(self):
+                    self.stderr = io.BytesIO(b"")
+                    self.stdout = io.BytesIO(b"")
+                    self.pid = 4321
+                    self.returncode = 0
+
+                def poll(self):
+                    # 中止在轮询间隙落地；子进程被回收后 waitpid 命中
+                    # ECHILD，subprocess 把返回码映射为 0
+                    coordinator.request_abort()
+                    return self.returncode
+
+                def wait(self, timeout=None):
+                    return self.returncode
+
+            return ReapedPopen()
+
+        monkeypatch.setattr(subprocess, "Popen", reaped_popen)
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
+        filepath = os.path.join(task["source_dir"], "a.mp4")
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+
+        with pytest.raises(TransferAbortedError):
+            run_task(task, now=NOW)
+
+        assert not os.path.exists(os.path.join(task["dest_dir"], "a-encoded.mp4"))
+        assert not os.path.exists(os.path.join(task["dest_dir"], ".mc-ffmpeg-part.a-encoded.mp4"))
+        assert snapshot(task["source_dir"]) == {"a.mp4": 5}
+        fkey = file_key(filepath)
+        assert state().get_failure_count(key_of(task), fkey) == 0
+        assert state().get_ffmpeg_failure_count(key_of(task), fkey) == 0
 
 
 # ============================================================

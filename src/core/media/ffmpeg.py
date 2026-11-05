@@ -327,6 +327,9 @@ def run_ffmpeg(
     """执行拼接完成的 ffmpeg 命令；返回是否成功。
 
     - 停止：fast 中止信号到达时终止进程树并抛 TransferAbortedError；
+      进程收尾后以中止信号终审定性——被协调器终止并回收的子进程其
+      返回码不可信（waitpid 命中 ECHILD 时 subprocess 会映射为 0），
+      中止在场时无论返回码一律按中止处理，不进入成功/失败分支；
     - 超时：timeout > 0 时超时终止进程树，按失败处理（返回 False）；
     - 进度：progress 协议块解析渲染后经 logger 输出（raw，不带时间戳
       头部，30 秒节流）；progress=end 的快照在进程结束后追加一次终写
@@ -406,6 +409,13 @@ def run_ffmpeg(
 
     process.wait()
     elapsed = time.time() - start_time
+
+    if coordinator.is_aborted():
+        # 中止终审：被终止的子进程可能已被 psutil 回收，本进程随后
+        # waitpid 命中 ECHILD，返回码会被 subprocess 映射为 0——返回码
+        # 不可信。中止在场时一律抛出：不发布产物、不计失败，与循环
+        # 顶部的中止路径汇合（part 清理与本轮丢弃由上层处理）。
+        raise TransferAbortedError()
 
     if timed_out:
         _log_error_tail(error_output, logger)
