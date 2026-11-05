@@ -216,9 +216,7 @@ class TestRunFFmpeg:
         _calls, state = stub_ffmpeg
         state["progress"] = _continue_block() + _end_block()
 
-        ok = run_ffmpeg(
-            "ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=LifecycleCoordinator()
-        )
+        ok = run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=LifecycleCoordinator())
 
         assert ok is True
         assert capture_log.has("info", "FFmpeg 处理完成")
@@ -232,9 +230,7 @@ class TestRunFFmpeg:
         _calls, state = stub_ffmpeg
         state["output"] = b"time=00:00:01.00 speed=2.0x\r\n"
 
-        run_ffmpeg(
-            "ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=LifecycleCoordinator()
-        )
+        run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=LifecycleCoordinator())
 
         assert not capture_log.has("info", "FFmpeg 进度")
         assert not capture_log.has("info", "【进行中】")
@@ -248,14 +244,13 @@ class TestRunFFmpeg:
 
         ok = run_ffmpeg(
             "ffmpeg cmd",
-            rel_path="a.mp4",
             logger=capture_log,
             coordinator=LifecycleCoordinator(),
             timeout=0.3,
         )
 
         assert ok is False
-        assert capture_log.has("error", "处理超时")
+        assert capture_log.has("error", "处理时长超出")
         progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "【进行中】" in m]
         assert len(progress_logs) == 1
         assert not capture_log.has("info", "【已完成】")
@@ -271,7 +266,6 @@ class TestRunFFmpeg:
 
         ok = run_ffmpeg(
             "ffmpeg cmd",
-            rel_path="a.mp4",
             logger=capture_log,
             coordinator=LifecycleCoordinator(),
             timeout=1.2,
@@ -287,9 +281,7 @@ class TestRunFFmpeg:
         state["returncode"] = 1
         state["progress"] = _continue_block()
 
-        ok = run_ffmpeg(
-            "ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=LifecycleCoordinator()
-        )
+        ok = run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=LifecycleCoordinator())
 
         assert ok is False
         assert capture_log.has("info", "【进行中】")
@@ -301,7 +293,7 @@ class TestRunFFmpeg:
         state["output"] = b"\n".join([b"line %d" % i for i in range(30)]) + b"\n"
 
         coordinator = LifecycleCoordinator()
-        ok = run_ffmpeg("ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=coordinator)
+        ok = run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=coordinator)
 
         assert ok is False
         # 只保留末尾 20 行
@@ -324,7 +316,6 @@ class TestRunFFmpeg:
         coordinator.register_process = register  # type: ignore[method-assign]
         run_ffmpeg(
             "ffmpeg cmd",
-            rel_path="a.mp4",
             logger=capture_log,
             coordinator=coordinator,
         )
@@ -339,14 +330,13 @@ class TestRunFFmpeg:
         coordinator = LifecycleCoordinator()
         ok = run_ffmpeg(
             "ffmpeg cmd",
-            rel_path="a.mp4",
             logger=capture_log,
             coordinator=coordinator,
             timeout=0.1,
         )
 
         assert ok is False
-        assert capture_log.has("error", "处理超时")
+        assert capture_log.has("error", "处理时长超出")
         # 超时终止后子进程已从登记处摘除
         assert coordinator._children == []
 
@@ -358,7 +348,6 @@ class TestRunFFmpeg:
         with pytest.raises(TransferAbortedError):
             run_ffmpeg(
                 "ffmpeg cmd",
-                rel_path="a.mp4",
                 logger=capture_log,
                 coordinator=coordinator,
             )
@@ -374,7 +363,7 @@ class TestRunFFmpeg:
         monkeypatch.setattr(subprocess, "Popen", boom)
         coordinator = LifecycleCoordinator()
 
-        ok = run_ffmpeg("ffmpeg cmd", rel_path="a.mp4", logger=capture_log, coordinator=coordinator)
+        ok = run_ffmpeg("ffmpeg cmd", logger=capture_log, coordinator=coordinator)
 
         assert ok is False
         assert capture_log.has("error", "无法启动 FFmpeg")

@@ -165,7 +165,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
                     continue
                 if success is not None:
                     # 源文件内容已变化：旧记录承载的义务随之失效
-                    ctx.logger.info(f"源文件已变化，重新处理: {rel_path}")
+                    ctx.logger.debug(f"源文件已变化，重新处理: {rel_path}")
                     state.delete_record(self._key, fkey)
 
                 # failure_count = 0 表示永不因失败跳过，失败文件每轮重试；
@@ -185,7 +185,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
                 try:
                     stat = os.stat(filepath)
                 except OSError as e:
-                    ctx.logger.error(f"读取文件失败: {filepath}\n{e}")
+                    ctx.logger.error(f"读取 {filepath} 的元数据失败:\n{e}")
                     continue
 
                 if not self._filter.check_mtime(stat.st_mtime, now):
@@ -288,7 +288,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
             except Exception as e:  # noqa: BLE001
                 ctx.logger.error(f"移入失败目录失败: {rel_path}\n{e}")
                 continue
-            ctx.logger.info(f"失败次数达到上限，已移入失败目录: {rel_path}")
+            ctx.logger.info(f"{rel_path} 的失败次数达到上限，已移入失败目录。")
             ctx.require_state().delete_record(self._key, fkey)
             self._stats.record_evicted()
             moved = True
@@ -299,6 +299,9 @@ class FFmpegTaskHandler(BaseTaskHandler):
     # ---- 逐文件处理 -----------------------------------------------------
 
     def _handle_entry(self, ctx: AppContext, entry: _ScanEntry) -> None:
+        # 流转路线的起点标记：此后的整条路线（稳定性检查 → 处理 → 善后）
+        # 都不再重复输出文件路径
+        ctx.logger.info(f"准备处理: {entry.rel_path}")
         try:
             if not self._check_stable(ctx, entry):
                 return
@@ -312,28 +315,28 @@ class FFmpegTaskHandler(BaseTaskHandler):
             raise
         except Exception as e:  # noqa: BLE001
             # 兜底捕获：单个文件的意外失败不允许中断本轮任务，统一记入失败计数
-            ctx.logger.error(f"处理文件失败: {entry.rel_path}\n{e}")
+            ctx.logger.error(f"处理文件时发生未知失败:\n{e}")
             ctx.require_state().increment_failure(self._key, file_key(entry.filepath))
             self._stats.record_failed()
 
     def _check_stable(self, ctx: AppContext, entry: _ScanEntry) -> bool:
         """稳定性检查：stable_duration 等待后复查文件大小是否仍在变化。"""
         config = self._config
-        filepath, rel_path = entry.filepath, entry.rel_path
+        filepath = entry.filepath
 
         if config.stable_duration <= 0:
             if not os.path.exists(filepath):
-                ctx.logger.warning(f"文件 {rel_path} 已不存在，跳过处理。")
+                ctx.logger.warning("文件已不存在，跳过处理。")
                 return False
             return True
 
         try:
             old_size = os.path.getsize(filepath)
         except OSError:
-            ctx.logger.warning(f"文件 {rel_path} 已不存在，跳过处理。")
+            ctx.logger.warning("文件已不存在，跳过处理。")
             return False
 
-        ctx.logger.info(f"正在检查 {rel_path} 在 {config.stable_duration:g} 秒内的一致性……")
+        ctx.logger.info(f"正在检查文件在 {config.stable_duration:g} 秒内的一致性……")
         remaining = config.stable_duration
         while remaining > 0:
             # 分片睡眠：fast 停止立即中止，不再阻塞整个监听循环
@@ -346,10 +349,10 @@ class FFmpegTaskHandler(BaseTaskHandler):
         try:
             new_size = os.path.getsize(filepath)
         except OSError:
-            ctx.logger.warning(f"文件 {rel_path} 已不存在，跳过处理。")
+            ctx.logger.warning("文件已不存在，跳过处理。")
             return False
         if new_size != old_size:
-            ctx.logger.info(f"文件 {rel_path} 正在变化，跳过本次处理。")
+            ctx.logger.info("文件正在变化，跳过本次处理。")
             return False
         return True
 
@@ -363,13 +366,13 @@ class FFmpegTaskHandler(BaseTaskHandler):
 
         try:
             ensure_dir(final_dest_dir)
-            ctx.logger.info(f"直接移动文件 {entry.rel_path} 至 {config.dest_dir}")
+            ctx.logger.info("正在直传文件……")
             move_file(entry.filepath, dst_filepath)
         except TransferAbortedError:
             raise
         except Exception as e:  # noqa: BLE001
             ctx.require_state().increment_failure(self._key, file_key(entry.filepath))
-            ctx.logger.error(f"直接移动文件失败: {entry.rel_path}\n{e}")
+            ctx.logger.error(f"直传文件失败:\n{e}")
             self._stats.record_failed()
             return
 
@@ -401,9 +404,9 @@ class FFmpegTaskHandler(BaseTaskHandler):
         template = config.ffmpeg_cmd_fallback if use_fallback else config.ffmpeg_cmd
         duration_note = self._duration_note(entry)
         if use_fallback:
-            ctx.logger.info(f"使用备用命令处理 {entry.rel_path}{duration_note}。")
+            ctx.logger.info(f"正在切换备用参数来调用 FFmpeg 处理文件{duration_note}。")
         else:
-            ctx.logger.info(f"开始处理 {entry.rel_path}{duration_note}。")
+            ctx.logger.info(f"正在调用 FFmpeg 处理文件{duration_note}。")
 
         cmd = build_command(template, entry.filepath, part_output_path)
         ctx.logger.debug(f"执行 FFmpeg 命令: {cmd}")
@@ -416,7 +419,6 @@ class FFmpegTaskHandler(BaseTaskHandler):
         try:
             ok = run_ffmpeg(
                 cmd,
-                rel_path=entry.rel_path,
                 logger=ctx.logger,
                 coordinator=ctx.lifecycle,
                 timeout=config.ffmpeg_timeout,
@@ -461,7 +463,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
         try:
             move_file(part_path, dst_path)
         except FsOpError as e:
-            ctx.logger.error(f"输出文件就位失败: {entry.rel_path}\n{e}")
+            ctx.logger.error(f"写入输出文件失败:\n{e}")
             ctx.require_state().increment_failure(self._key, fkey)
             _discard_part_file(part_path)
             self._stats.record_failed()
@@ -498,18 +500,16 @@ class FFmpegTaskHandler(BaseTaskHandler):
                 except FsOpError as e:
                     # 删除义务未履行：写成功记录（待删除凭证），下轮经
                     # 到期清理路径重试（立即删除模式记录存在即已到期）
-                    ctx.logger.error(f"删除源文件失败: {entry.rel_path}\n{e}")
+                    ctx.logger.error(f"删除源文件失败:\n{e}")
                     state.mark_success(self._key, fkey, time.time(), entry.size, entry.mtime)
                 else:
-                    ctx.logger.info(f"已删除源文件: {entry.rel_path}")
+                    ctx.logger.info("已删除源文件。")
                     # 义务已了结：源文件离开源树，不留记录（并清残留失败计数）
                     state.delete_record(self._key, fkey)
             else:
                 # 延迟删除窗口：记录承载待删除义务，兼作窗口期防重复依据
                 state.mark_success(self._key, fkey, time.time(), entry.size, entry.mtime)
-                ctx.logger.info(
-                    f"源文件 {entry.rel_path} 将在 {config.source_expired_minutes:g} 分钟后删除。"
-                )
+                ctx.logger.info(f"源文件将在 {config.source_expired_minutes:g} 分钟后删除。")
         else:
             if config.backup_dir:
                 bak_dir = os.path.join(config.backup_dir, rel_dir)
@@ -521,14 +521,14 @@ class FFmpegTaskHandler(BaseTaskHandler):
                 except TransferAbortedError:
                     raise
                 except Exception as e:  # noqa: BLE001
-                    ctx.logger.error(f"移动源文件到备份目录失败: {entry.rel_path}\n{e}")
+                    ctx.logger.error(f"源文件备份失败:\n{e}")
                     state.increment_failure(self._key, fkey)
                     self._stats.record_failed()
                     return
                 # 备份成功：源文件离开源树，义务了结不留记录（并清残留失败计数）
                 state.delete_record(self._key, fkey)
             else:
-                ctx.logger.info(f"源文件保留在原位置: {entry.rel_path}")
+                ctx.logger.debug(f"源文件保留在原位置: {entry.rel_path}")
                 # 保留在原地：记录承载防重复义务（内容变化即失效重处理）
                 state.mark_success(self._key, fkey, time.time(), entry.size, entry.mtime)
 

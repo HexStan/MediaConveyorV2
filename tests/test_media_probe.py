@@ -84,7 +84,7 @@ class TestGetMediaInfo:
 
         assert info["size"] == 1000
         assert info["duration"] == 0.0
-        assert capture_log.has("error", "ffprobe 获取媒体信息失败")
+        assert capture_log.has("error", "的媒体信息失败")
 
     def test_nonzero_return_code(self, media_file, capture_log):
         with _mock_run(returncode=1):

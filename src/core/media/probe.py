@@ -128,6 +128,6 @@ def get_media_info(filepath: str, logger: Logger) -> MediaInfo:
     except Exception as e:  # noqa: BLE001
         # 兜底捕获：ffprobe 的任何异常（缺失、超时、输出异常）都不允许向上抛出，
         # 必须降级为全零默认值
-        logger.error(f"ffprobe 获取媒体信息失败: {filepath}\n{e}")
+        logger.error(f"获取 {filepath} 的媒体信息失败:\n{e}")
 
     return info
