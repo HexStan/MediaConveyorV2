@@ -16,9 +16,10 @@
 stats 行、-progress pipe:1 让进度块写入 stdout。stdout 读取线程以
 progress= 行为块边界切块，主轮询循环把块解析为快照并渲染成中文进度行
 （format_progress）经 logger 输出——raw 模式落笔（不带时间戳头部），
-以 30 秒节流，无新块时也以最新快照渲染，计时器持续走动。输出时间戳
-以「out_time / 总时长」两段显示，行末的「预计还需」以平均速率法估算
-剩余墙钟时间；媒体总时长取自 stderr 启动横幅的 Duration 行（首个
+以 30 秒节流，无新块时也以最新快照渲染，计时器持续走动。「持续时间」
+以「已运行 / ETA」两段显示，ETA 以平均速率法估算剩余墙钟
+时间；输出时间戳以「out_time / 总时长」两段显示；媒体总时长取自
+stderr 启动横幅的 Duration 行（首个
 可解析者生效），未知（横幅缺失、模板含 -hide_banner、管道输入等）
 时退化为占位符；横幅为完整输入时长，模板含 -ss / -t 裁剪时分母与
 估算偏大（见 _format_eta）。progress=end 的快照在进程
@@ -269,7 +270,7 @@ def _parse_banner_duration(line: str) -> float | None:
 
 
 def _format_eta(progress: FFmpegProgress, elapsed: float, total_duration: float | None) -> str:
-    """预计还需：按开局以来的平均处理速率推算剩余墙钟时间（恒 MM:SS，分钟位不封顶）。
+    """按开局以来的平均处理速率推算剩余墙钟时间（恒 MM:SS，分钟位不封顶）。
 
     平均速率 = 已处理媒体时长（out_time）÷ 已运行墙钟时间，恒以累计值
     计算：不依赖 ffmpeg speed 字段的版本语义（瞬时 / 累计不一），30 秒
@@ -291,8 +292,8 @@ def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: fl
     """渲染中文进度行（三种输出形态共用的唯一格式，见模块 docstring）。
 
     total_duration 为 run_ffmpeg 从 stderr 启动横幅解析出的媒体总时长
-    （秒）：作为输出时间戳的分母显示（未知为占位符），并供行末
-    「预计还需」字段估算，见 _format_eta。
+    （秒）：作为输出时间戳的分母显示（未知为占位符），并供
+    「持续时间」字段的 ETA 估算，见 _format_eta。
     """
     size = (
         fmt_size(progress.total_size, binary=True)
@@ -302,7 +303,7 @@ def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: fl
     state = _PROGRESS_STATE.get(progress.progress, progress.progress)
     fields = [
         state,
-        f"持续时间：{_format_timer(elapsed)}",
+        f"持续时间：{_format_timer(elapsed)} / {_format_eta(progress, elapsed, total_duration)}",
         f"输出时间戳：{_format_out_time(progress.out_time)} / {_format_duration(total_duration)}",
         f"当前帧：{progress.frame or _PROGRESS_PLACEHOLDER}",
         f"码率：{progress.bitrate or _PROGRESS_PLACEHOLDER}",
@@ -311,7 +312,6 @@ def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: fl
         f"速率：{progress.speed or _PROGRESS_PLACEHOLDER}",
         f"复制帧：{progress.dup_frames or _PROGRESS_PLACEHOLDER}",
         f"丢弃帧：{progress.drop_frames or _PROGRESS_PLACEHOLDER}",
-        f"预计还需：{_format_eta(progress, elapsed, total_duration)}",
     ]
     return " | ".join(fields)
 
@@ -412,8 +412,8 @@ def run_ffmpeg(
       中止在场时无论返回码一律按中止处理，不进入成功/失败分支；
     - 超时：timeout > 0 时超时终止进程树，按失败处理（返回 False）；
     - 进度：progress 协议块解析渲染后经 logger 输出（raw，不带时间戳
-      头部，30 秒节流，输出时间戳的分母与行末「预计还需」的估算均以
-      stderr 启动横幅解析的媒体总时长为准）；progress=end 的快照在
+      头部，30 秒节流，输出时间戳的分母与「持续时间」ETA的估算
+      均以 stderr 启动横幅解析的媒体总时长为准）；progress=end 的快照在
       进程结束后追加一次终写状态行，异常结束（失败/超时/中止）不
       追加，最后一行进度原样保留。
     """
