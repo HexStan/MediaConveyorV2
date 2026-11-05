@@ -49,7 +49,7 @@ uv run python scripts/smoke_test.py "dist/MediaConveyor-*.zip"          # 对发
 - 运行入口：`main.py` 仅 CLI 解析与分发；运行路径在 `src/app/runtime.py`，start/log/stop/run-once 子命令在 `src/app/control.py`。
 - 加载期：`src/app/config.py` 的 `ConfigManager`（Pydantic）完成仅凭配置即可判定的校验；任务配置模型与过滤模型在 `src/core/task_config.py`，逐任务校验在 `src/core/task_plan.py` 的 `resolve_tasks()`。
 - 运行期：处理器在 `src/core/handlers/`（基类 `BaseTaskHandler` 只做模板方法编排，`create_handler` / `process_task` 为装配入口）。
-- 领域层：`src/core/media/` —— `parsing.py`（配置值解析）、`probe.py`（ffprobe 封装）、`filter.py`（文件过滤与媒体匹配）、`ffmpeg.py`（命令模板填充与执行）。
+- 领域层：`src/core/media/` —— `parsing.py`（配置值解析）、`probe.py`（ffprobe 封装）、`filter.py`（文件过滤与媒体匹配）、`ffmpeg/`（`command` 命令组装、`progress` 进度协议、`execute` 子进程托管）。
 - 状态库：`src/core/state.py` 的 `StateManager`（SQLite）是防重复处理、失败计数与 fallback 切换的唯一依据。
 - 底层：本地文件 I/O 原语在 `src/fs/`（仅标准库）；共享校验基建 `src/validation.py`（仅 pydantic）；共享平台探测 `src/platform_info.py`（唯一入口）。
 - `AppContext`（`src/app/context.py`）是全局单例，logger / state 经 `AppContext.get()` 获取。

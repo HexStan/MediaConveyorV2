@@ -15,7 +15,8 @@ import pytest
 from src.app.config import GlobalConfig
 from src.app.context import AppContext
 from src.core.handlers import create_handler
-from src.core.media import ffmpeg as ffmpeg_module
+from src.core.media.ffmpeg import execute as ffmpeg_execute
+from src.core.media.ffmpeg.command import FFMPEG_PART_PREFIX
 from src.core.state import StateManager
 from src.core.task_plan import resolve_tasks
 
@@ -131,7 +132,7 @@ def stub_ffmpeg(monkeypatch):
             # {output} 的填充值位于命令行末尾（剥去平台引号）；仅当它是
             # part 路径时才写出，避免单元测试的裸命令被误当路径
             output_path = cmd.rstrip().rsplit(None, 1)[-1].strip("\"'")
-            if os.path.basename(output_path).startswith(ffmpeg_module.FFMPEG_PART_PREFIX):
+            if os.path.basename(output_path).startswith(FFMPEG_PART_PREFIX):
                 with open(output_path, "wb") as f:
                     f.write(b"encoded")
         return FakePopen(
@@ -142,7 +143,7 @@ def stub_ffmpeg(monkeypatch):
         )
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(ffmpeg_module, "_POLL_INTERVAL", 0.05)
+    monkeypatch.setattr(ffmpeg_execute, "_POLL_INTERVAL", 0.05)
     # 超时终止走真实协调器 → 进程树终止打桩为无副作用
     monkeypatch.setattr("src.app.lifecycle.terminate_process_tree", lambda pid, logger=None: True)
     return calls, state

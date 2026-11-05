@@ -30,7 +30,7 @@ from pydantic import (
     model_validator,
 )
 
-from src.core.media.ffmpeg import TemplateFormatError, render_output_filename
+from src.core.media.ffmpeg.command import TemplateFormatError, render_output_filename
 from src.core.media.parsing import (
     InvalidBitrateError,
     InvalidDurationError,

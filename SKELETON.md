@@ -19,7 +19,7 @@
 | 骨架 + 领域适配 | `src/core/handlers/base.py` / `__init__.py` | 处理器基类与装配入口的模式来自骨架；模板方法编排细节为本项目实现 |
 | 骨架 + 领域适配 | `src/validation.py` | 共享校验基建的定位来自骨架；校验对象为本项目的标识符体系 |
 | 领域自实现 | `src/core/state.py` | SQLite 状态库：防重复处理、失败计数、fallback 切换的唯一依据 |
-| 领域自实现 | `src/core/media/` | 媒体领域：配置值解析、ffprobe 探测、过滤流水线、FFmpeg 命令模板填充与执行 |
+| 领域自实现 | `src/core/media/` | 媒体领域：配置值解析、ffprobe 探测、过滤流水线、FFmpeg 包（command 命令组装、progress 进度协议、execute 子进程托管） |
 | 领域自实现 | `src/core/handlers/ffmpeg_task.py` | FFmpeg 任务处理器：目录监听流水线与源文件善后 |
 
 tests/ 中对应上述各层的测试文件遵循同样的归属划分（app / fs / output 层测试对应骨架设施，media / state 层测试对应领域实现）。

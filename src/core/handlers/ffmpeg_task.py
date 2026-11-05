@@ -32,13 +32,13 @@ if TYPE_CHECKING:
 
 from src.app.context import AppContext
 from src.core.handlers.base import BaseTaskHandler
-from src.core.media.ffmpeg import (
+from src.core.media.ffmpeg.command import (
     TemplateFormatError,
     build_command,
     part_output_filename,
     render_output_filename,
-    run_ffmpeg,
 )
+from src.core.media.ffmpeg.execute import run_ffmpeg
 from src.core.media.filter import FileFilter
 from src.core.media.probe import MediaInfo, empty_media_info, get_media_info
 from src.core.state import SuccessState, file_key, task_key

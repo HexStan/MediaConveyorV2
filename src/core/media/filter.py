@@ -14,14 +14,14 @@ size 与 file_mtime 不触发 ffprobe，纯文件名/大小/时间过滤的扫�
 import fnmatch
 from collections.abc import Sequence
 
-from src.core.media.ffmpeg import FFMPEG_PART_PREFIX
+from src.core.media.ffmpeg.command import FFMPEG_PART_PREFIX
 from src.core.media.probe import MediaInfo
 from src.core.task_config import FilterConfig
 from src.core.types import FileAction
 from src.fs.atomic import PARTIAL_SUFFIX
 from src.output.logger import Logger
 
-# 本工具瞬态文件的保留名：FFmpeg 输出 part（media.ffmpeg，前缀标记）与
+# 本工具瞬态文件的保留名：FFmpeg 输出 part（media.ffmpeg.command，前缀标记）与
 # 原子写 part（fs.atomic，后缀标记）。分类对之作保留名处理——链式任务
 # 监听上游 dest_dir 时不会把写入中的中间产物当作待处理文件，passthrough
 # 全匹配（``*``）也不会把它们直传走；用户 patterns（含 include）无法

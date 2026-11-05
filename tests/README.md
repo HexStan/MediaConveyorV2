@@ -18,7 +18,9 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
 | 白盒·媒体属性探测 | `test_media_probe.py` | ffprobe 封装（JSON 解析、容错降级、首个流选取） | `subprocess.run` 进程边界打桩 |
 | 白盒·配置值解析 | `test_media_parsing.py` | 容量/时长/码率解析器（IEC 80000-13 单位语义、显式报错） | 纯函数直接调用 |
 | 白盒·文件过滤 | `test_media_filter.py` | classify 流水线、file_mtime 冷却、媒体属性匹配 | 直接调用 |
-| 白盒·FFmpeg 执行 | `test_media_ffmpeg.py` | 命令模板填充、progress 协议块解析与进度行渲染、节流与 end 终写时序、超时与 fast 中止 | `stub_ffmpeg`（conftest） |
+| 白盒·FFmpeg 命令组装 | `test_media_ffmpeg_command.py` | 模板填充、程序预置参数注入、平台引号、part 文件命名 | 纯函数直接调用 |
+| 白盒·FFmpeg progress 协议 | `test_media_ffmpeg_progress.py` | progress 块解析与中文进度行渲染 | 纯函数直接调用 |
+| 白盒·FFmpeg 子进程托管 | `test_media_ffmpeg_execute.py` | 节流与 end 终写时序、超时与 fast 中止 | `stub_ffmpeg`（conftest） |
 | 白盒·状态库 | `test_state.py` | SQLite 记录语义（任务隔离、成功快照、计数清零） | 真实 SQLite（tmp 目录） |
 | 白盒·任务配置模型 | `test_task_config.py` | 任务模型字段级校验契约（必填/强转/范围值加载期解析/未知字段拒绝） | 直接调用配置模型 + format_validation_error |
 | 白盒+灰盒·任务依赖 | `test_task_dependencies.py` | 加载期 id/depends_on/路径关系校验（resolve_tasks）+ run_tasks 依赖编排 | 直接调用 resolve_tasks + 同步驱动 run_tasks（真实文件系统） |
@@ -42,8 +44,8 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
 **原则二：白盒只补外部不可见的契约。**
 只有当行为从 `execute()` 入口无法观察（或观察成本畸高）时，才写白盒单元测试。当前属于这一类的契约：
 - **ffprobe 输出解析**：JSON 字段到媒体属性字典的映射、异常降级为全零默认值（`test_media_probe.py`）；
-- **命令模板填充**：`{input}`/`{output}` 值按运行平台自动加引号、其他花括号显式报错、多行合并，`output_filename` 模板仅支持 `{basename}`（`test_media_ffmpeg.py`）；
-- **输出流解析与进度消费**：stdout progress 块按 `progress=` 行切块与解析、中文进度行渲染、30 秒节流与 end 终写时序（`test_media_ffmpeg.py`）；
+- **命令模板填充**：`{input}`/`{output}` 值按运行平台自动加引号、其他花括号显式报错、多行合并，`output_filename` 模板仅支持 `{basename}`（`test_media_ffmpeg_command.py`）；
+- **输出流解析与进度消费**：stdout progress 块按 `progress=` 行切块与解析、中文进度行渲染、30 秒节流与 end 终写时序（`test_media_ffmpeg_progress.py` / `test_media_ffmpeg_execute.py`）；
 - **状态库记录语义**：成功快照（size/mtime）与失败计数是"重处理判定"的唯一依据，任务键隔离需按 (task_key, filepath) 精确钉死（`test_state.py`）；
 - **单位语义**：容量 KB=1000/KiB=1024、码率十进制词头，无效配置显式报错（`test_media_parsing.py`）。
 不在此列的内部细节（比如某个私有方法的返回结构）不要测——那会把测试焊死在实现上。
@@ -87,7 +89,7 @@ MediaConveyor 的本质是一个“监听目录树 + 配置 → 新目录树 + S
    （`src/app/paths.py`），打包缺失模块、入口崩溃等只有真实产物能暴露；
 3. **内置 FFmpeg 真实转码**：先以包内 `_internal/ffmpeg/ffmpeg` 合成测试视频
    （lavfi 源），再经程序注入的 `ffmpeg` 转码（命令组装见
-   `src/core/media/ffmpeg.py`）——PATH 前置
+   `src/core/media/ffmpeg/command.py`）——PATH 前置
    （`src/app/paths.py`）与内置二进制可执行性只有真实产物能验证。
 
 约定：
