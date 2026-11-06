@@ -81,6 +81,14 @@ dest_dir = "/data/Videos/Final"
 # 范围：≥ 0，0 表示不检查
 # stable_duration = 5
 
+# 【选填】处理顺序：待处理文件清单确定后按何种顺序逐个处理；默认 "default"
+# 范围："default"（扫描顺序：目录名排序后深度优先遍历）
+#       "alphabetic"（按相对路径字典序，大小写不敏感）
+#       "largest_first"（文件从大到小）/ "smallest_first"（从小到大）
+#       "newest_first"（修改时间从新到旧）/ "oldest_first"（从旧到新）
+# 大小/时间/路径相同的平局保持扫描顺序
+# process_order = "default"
+
 # 【选填】FFmpeg 单文件处理超时（秒），超时终止进程并按失败计数；默认 0
 # 范围：≥ 0，0 表示不限
 # ffmpeg_timeout = 3600

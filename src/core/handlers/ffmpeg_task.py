@@ -5,7 +5,9 @@
 1. 扫描：os.walk 确定性排序遍历 → 文件名分类流水线（classify）→
    状态判定（已成功且源文件未变化则跳过；失败达上限的文件进入失败
    隔离或永久跳过，failure_count = 0 表示永不因失败跳过）→
-   修改时间冷却 → 媒体属性过滤（仅在配置了需要 ffprobe 的条件时探测）；
+   修改时间冷却 → 媒体属性过滤（仅在配置了需要 ffprobe 的条件时探测）→
+   按任务配置的处理顺序（process_order）排布待处理条目，default 保持
+   扫描顺序不变；
 2. 善后清理：remove_source 模式下到期的源文件（source_expired_minutes
    = 0 的立即删除模式，记录存在即已到期；删除成功才清记录，失败下轮
    重试）与已达失败上限的源文件（配置 failure_dir 时移入该目录并清
@@ -24,8 +26,9 @@
 import contextlib
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from src.core.task_plan import TaskSpec
@@ -80,6 +83,28 @@ class _ScanReport:
     evictions: list[tuple[str, str, str]] = field(default_factory=list)  # (rel, filepath, fkey)
 
 
+# 处理顺序 → 排序键（ProcessOrder 的非 default 取值）：size/mtime 均为扫描
+# 时 os.stat 的现成数据，排序零额外 I/O。sorted 为稳定排序，键相同的平局
+# 保持扫描顺序，处理顺序确定且跨平台可复现。
+_ENTRY_SORT_KEYS: dict[str, Callable[[_ScanEntry], Any]] = {
+    # 相对路径字典序（大小写不敏感）：分隔符统一为 / 保证跨平台比较一致，
+    # 归一后仍相同（如 Linux 上同目录的 A.mp4 与 a.mp4）时以原文码点决胜
+    "alphabetic": lambda e: (e.rel_path.replace("\\", "/").casefold(), e.rel_path),
+    "largest_first": lambda e: -e.size,
+    "smallest_first": lambda e: e.size,
+    "newest_first": lambda e: -e.mtime,
+    "oldest_first": lambda e: e.mtime,
+}
+
+
+def _order_entries(entries: list[_ScanEntry], order: str) -> list[_ScanEntry]:
+    """按任务配置的处理顺序排布待处理条目；default 原样返回（保持扫描顺序）。"""
+    key = _ENTRY_SORT_KEYS.get(order)
+    if key is None:
+        return entries
+    return sorted(entries, key=key)
+
+
 def _discard_part_file(part_path: str) -> None:
     """尽力删除 FFmpeg 输出的 part 文件（本轮失败残骸或上次崩溃残留）。"""
     with contextlib.suppress(OSError):
@@ -118,6 +143,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
         start_time = time.time()
         try:
             report = self._scan(ctx)
+            report.entries = _order_entries(report.entries, config.process_order)
             self._cleanup_expired(ctx, report.expired)
             self._evict_failed(ctx, report.evictions)
 

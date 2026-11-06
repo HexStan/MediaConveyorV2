@@ -5,6 +5,8 @@
   extra="forbid" 拒绝未知字段；
 - output_filename 模板仅支持 {basename}，渲染结果必须是纯文件名；
 - 数字字段接受数字字符串（lax 强转），布尔值一律拒绝；
+- process_order 枚举字段大小写不敏感，缺省为 default，非法取值报
+  中文错误；
 - 过滤条件的范围值在加载期解析：非法值得到明确的中文错误，而不是
   运行期被静默当作 0；
 - 配置了 fallback_count 必须同时配置备用命令。
@@ -39,6 +41,7 @@ class TestRequiredFields:
         assert config.fallback_count == 0
         assert config.ffmpeg_timeout == 0
         assert config.stable_duration == 0
+        assert config.process_order == "default"
         assert config.remove_source is False
         assert config.source_expired_minutes == 0
         assert config.backup_dir == ""
@@ -131,6 +134,44 @@ class TestFallbackValidation:
         )
 
         assert config.fallback_count == 3
+
+
+class TestProcessOrder:
+    """process_order 枚举字段：缺省值、大小写归一与非法取值报错。"""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "default",
+            "alphabetic",
+            "largest_first",
+            "smallest_first",
+            "newest_first",
+            "oldest_first",
+        ],
+    )
+    def test_valid_values_accepted(self, value):
+        config = TaskConfig.model_validate(make_task(process_order=value))
+
+        assert config.process_order == value
+
+    def test_value_case_insensitive(self):
+        config = TaskConfig.model_validate(make_task(process_order="Largest_First"))
+
+        assert config.process_order == "largest_first"
+
+    def test_invalid_value_rejected(self):
+        with pytest.raises(ValidationError) as exc_info:
+            TaskConfig.model_validate(make_task(process_order="random"))
+
+        message = format_validation_error(exc_info.value)
+        assert "process_order: 配置值无效，允许的取值" in message
+
+    def test_non_string_rejected(self):
+        with pytest.raises(ValidationError) as exc_info:
+            TaskConfig.model_validate(make_task(process_order=123))
+
+        assert "process_order: 配置值无效，允许的取值" in format_validation_error(exc_info.value)
 
 
 class TestFilterConfig:

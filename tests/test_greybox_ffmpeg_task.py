@@ -958,3 +958,141 @@ class TestTaskIsolation:
 
         # 任务 B 的状态键独立，仍会处理该文件
         assert len(calls) == 1
+
+
+# ============================================================
+# 处理顺序（process_order）
+# ============================================================
+
+# 固定测试树：四种大小 × 四个 mtime，六种取值的处理顺序两两不同。
+# mtime 从旧到新：x < b < y < c；size 从大到小：b(400) > y(300) > c(200) > x(100)。
+# 扫描顺序（default）= [b, c, x, y]；alphabetic = [x, y, b, c]（子目录排前）。
+_ORDER_TREE = {
+    "b.mp4": (b"x" * 400, OLD + 86400),
+    "c.mp4": (b"x" * 200, NOW),
+    "a/x.mp4": (b"x" * 100, OLD),
+    "a/y.mp4": (b"x" * 300, OLD + 2 * 86400),
+}
+_ORDER_NAMES = ("b.mp4", "c.mp4", "x.mp4", "y.mp4")
+
+
+def _call_names(calls, names):
+    """stub 记录的命令行 → 被处理文件的 basename 序列（即处理顺序）。"""
+    order = []
+    for call in calls:
+        matched = [name for name in names if name in call]
+        assert len(matched) == 1, f"命令行无法唯一对应文件: {call}"
+        order.append(matched[0])
+    return order
+
+
+def _logged_order():
+    """捕获日志中的逐文件处理序列（【i/total】准备处理: {rel_path}）。"""
+    order = []
+    for _level, msg in AppContext.get().logger.messages:
+        if "准备处理: " in msg:
+            order.append(msg.split("准备处理: ", 1)[1].replace(os.sep, "/"))
+    return order
+
+
+class TestProcessOrder:
+    def test_default_keeps_scan_order(self, run_task, tmp_path, stub_ffmpeg):
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest")
+        make_tree(task["source_dir"], _ORDER_TREE)
+
+        run_task(task, now=NOW)
+
+        # 扫描顺序：根目录文件名排序在前（b, c），随后子目录 a（x, y）
+        assert _call_names(calls, _ORDER_NAMES) == ["b.mp4", "c.mp4", "x.mp4", "y.mp4"]
+
+    def test_alphabetic_orders_by_rel_path(self, run_task, tmp_path, stub_ffmpeg):
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", process_order="alphabetic")
+        make_tree(task["source_dir"], _ORDER_TREE)
+
+        run_task(task, now=NOW)
+
+        # 相对路径字典序：子目录 a 的文件排在前——与扫描顺序相反
+        assert _call_names(calls, _ORDER_NAMES) == ["x.mp4", "y.mp4", "b.mp4", "c.mp4"]
+
+    def test_alphabetic_case_insensitive(self, run_task, tmp_path, stub_ffmpeg):
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", process_order="alphabetic")
+        make_tree(task["source_dir"], {"B.mp4": b"x" * 10, "a.mp4": b"x" * 10})
+
+        run_task(task, now=NOW)
+
+        # 比较前统一 casefold：a.mp4 在 B.mp4 之前（码点序会把 B 排前）
+        assert _call_names(calls, ("a.mp4", "B.mp4")) == ["a.mp4", "B.mp4"]
+
+    def test_largest_first(self, run_task, tmp_path, stub_ffmpeg):
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", process_order="largest_first")
+        make_tree(task["source_dir"], _ORDER_TREE)
+
+        run_task(task, now=NOW)
+
+        assert _call_names(calls, _ORDER_NAMES) == ["b.mp4", "y.mp4", "c.mp4", "x.mp4"]
+
+    def test_smallest_first(self, run_task, tmp_path, stub_ffmpeg):
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", process_order="smallest_first")
+        make_tree(task["source_dir"], _ORDER_TREE)
+
+        run_task(task, now=NOW)
+
+        assert _call_names(calls, _ORDER_NAMES) == ["x.mp4", "c.mp4", "y.mp4", "b.mp4"]
+
+    def test_newest_first(self, run_task, tmp_path, stub_ffmpeg):
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", process_order="newest_first")
+        make_tree(task["source_dir"], _ORDER_TREE)
+
+        run_task(task, now=NOW)
+
+        assert _call_names(calls, _ORDER_NAMES) == ["c.mp4", "y.mp4", "b.mp4", "x.mp4"]
+
+    def test_oldest_first(self, run_task, tmp_path, stub_ffmpeg):
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", process_order="oldest_first")
+        make_tree(task["source_dir"], _ORDER_TREE)
+
+        run_task(task, now=NOW)
+
+        assert _call_names(calls, _ORDER_NAMES) == ["x.mp4", "b.mp4", "y.mp4", "c.mp4"]
+
+    def test_size_ties_keep_scan_order(self, run_task, tmp_path, stub_ffmpeg):
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", process_order="largest_first")
+        make_tree(task["source_dir"], {"m.mp4": b"x" * 100, "z.mp4": b"x" * 50, "a.mp4": b"x" * 50})
+
+        run_task(task, now=NOW)
+
+        # 稳定排序：同为 50 字节的 a/z 保持扫描顺序（文件名字典序）
+        assert _call_names(calls, ("m.mp4", "z.mp4", "a.mp4")) == ["m.mp4", "a.mp4", "z.mp4"]
+
+    def test_passthrough_joins_ordering(self, run_task, tmp_path, stub_ffmpeg):
+        calls, _fstate = stub_ffmpeg
+        task = ffmpeg_task(
+            tmp_path / "src",
+            tmp_path / "dest",
+            passthrough_patterns=["*.srt"],
+            process_order="alphabetic",
+        )
+        make_tree(
+            task["source_dir"],
+            {"b.mp4": b"x" * 20, "z.srt": b"x" * 5, "a/x.mp4": b"x" * 10},
+        )
+
+        run_task(task, now=NOW)
+
+        # 直传文件与 FFmpeg 文件在同一队列一起排序；日志序列含全部文件
+        assert _logged_order() == ["a/x.mp4", "b.mp4", "z.srt"]
+        # ffmpeg 仅被 mp4 文件调用，直传不经过 ffmpeg
+        assert _call_names(calls, ("b.mp4", "x.mp4")) == ["x.mp4", "b.mp4"]
+        assert snapshot(task["dest_dir"]) == {
+            "a/x-encoded.mp4": 7,
+            "b-encoded.mp4": 7,
+            "z.srt": 5,
+        }

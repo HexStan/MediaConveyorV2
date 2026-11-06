@@ -19,7 +19,7 @@ app.runtime 的任务循环判定。
 字段交给类型与范围约束，由 format_validation_error 统一翻译。
 """
 
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -165,6 +165,29 @@ class FilterConfig(BaseModel):
     )
 
 
+# ---- 任务级枚举字段 ----------------------------------------------------------
+
+
+def _lower_str(value: object) -> object:
+    """枚举型字符串字段统一收小写（与过滤 patterns 的大小写不敏感惯例
+    一致）；非字符串原样放行，交由类型约束报错。"""
+    if isinstance(value, str):
+        return value.lower()
+    return value
+
+
+# 处理顺序：待处理文件清单确定后的逐文件处理次序（运行期消费方为
+# FFmpegTaskHandler；default 保持扫描顺序不变）
+ProcessOrder = Literal[
+    "default",
+    "alphabetic",
+    "largest_first",
+    "smallest_first",
+    "newest_first",
+    "oldest_first",
+]
+
+
 # ---- 任务模型 ---------------------------------------------------------------
 
 
@@ -185,6 +208,9 @@ class TaskConfig(BaseModel):
     # 没有目标目录的任务无意义，dest_dir 必填
     dest_dir: Annotated[str, StringConstraints(min_length=1)]
     filter: FilterConfig = Field(default_factory=FilterConfig)
+
+    # 待处理文件清单确定后的处理顺序；default 保持扫描顺序（os.walk 确定性遍历）
+    process_order: Annotated[ProcessOrder, BeforeValidator(_lower_str)] = "default"
 
     # FFmpeg 参数模板（{input}/{output} 占位符；ffmpeg 可执行文件与预置参数
     # 由程序注入），多行书写合法
