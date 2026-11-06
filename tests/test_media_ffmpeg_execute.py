@@ -139,6 +139,30 @@ class TestRunFFmpeg:
         assert any(re.search(r"持续时间：\d{2,}:\d{2} / \d{2,}:\d{2}", m) for m in progress_logs)
         assert any(re.search(r"输出时间戳：\d{2,}:\d{2} / \d{2,}:\d{2}", m) for m in progress_logs)
 
+    def test_probe_duration_precedes_banner(self, stub_ffmpeg, capture_log, monkeypatch):
+        """传入探测时长时状态行直接使用：横幅即使在场也不参与解析。"""
+        monkeypatch.setattr("src.core.media.ffmpeg.execute._PROGRESS_LOG_INTERVAL", 0)
+        _calls, state = stub_ffmpeg
+        state["hangs"] = True
+        state["output"] = _banner_output()
+        state["progress"] = _continue_block()
+
+        ok = run_ffmpeg(
+            "ffmpeg cmd",
+            logger=capture_log,
+            coordinator=LifecycleCoordinator(),
+            timeout=0.3,
+            total_duration=42.0,
+        )
+
+        assert ok is False
+        progress_logs = [m for lv, m in capture_log.messages if lv == "info" and "进行中" in m]
+        assert progress_logs
+        # 分母取探测值 00:42（out_time = 1 秒）
+        assert any("输出时间戳：00:01 / 00:42" in m for m in progress_logs)
+        # 横幅的 00:08 不再生效（锚定输出时间戳分母位，避免与预计总耗时估算撞形）
+        assert not any("输出时间戳：00:01 / 00:08" in m for m in progress_logs)
+
     def test_failure_appends_no_end_record(self, stub_ffmpeg, capture_log):
         """命令失败（无 end 块）：不追加终写状态行，最后一行进度原样保留。"""
         _calls, state = stub_ffmpeg

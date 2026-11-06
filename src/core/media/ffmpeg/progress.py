@@ -3,11 +3,12 @@
 渲染语义（三种输出形态共用的唯一格式，见 format_progress）：
 「持续时间」以「已运行 / 预计总耗时」两段显示，预计总耗时以平均
 速率法估算（已运行 + 预计剩余，见 _format_estimated_total）；输出
-时间戳以「out_time / 总时长」两段显示；媒体总时长由 execute 模块
-从 stderr 启动横幅嗅探（parse_banner_duration，首个可解析者生效），
-未知（横幅缺失、模板含 -hide_banner、管道输入等）时退化为占位符；
-横幅为完整输入时长，模板含 -ss / -t 裁剪时分母与估算偏大
-（见 _format_estimated_total）。
+时间戳以「out_time / 总时长」两段显示；媒体总时长优先取
+get_media_info 阶段探测的值（经调用方传入 execute），未探测或探测
+无时长时由 execute 从 stderr 启动横幅嗅探（parse_banner_duration，
+首个可解析者生效），两者皆缺（横幅缺失、模板含 -hide_banner、管道
+输入等）时退化为占位符；两种来源均为完整输入时长，模板含 -ss / -t
+裁剪时分母与估算偏大（见 _format_estimated_total）。
 """
 
 from dataclasses import dataclass
@@ -159,9 +160,11 @@ def _format_estimated_total(
 def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: float | None) -> str:
     """渲染中文进度行（三种输出形态共用的唯一格式，见模块 docstring）。
 
-    total_duration 为 execute 从 stderr 启动横幅解析出的媒体总时长
-    （秒）：作为输出时间戳的分母显示（未知为占位符），并供
-    「持续时间」字段的预计总时长估算，见 _format_estimated_total。
+    total_duration 为媒体总时长（秒）：优先取 get_media_info 阶段
+    探测的值（经调用方传入 execute），未探测或探测无时长时为 execute
+    从 stderr 启动横幅嗅探的值。作为输出时间戳的分母显示（未知为
+    占位符），并供「持续时间」字段的预计总时长估算，见
+    _format_estimated_total。
     """
     size = (
         fmt_size(progress.total_size, binary=True)

@@ -411,6 +411,10 @@ class FFmpegTaskHandler(BaseTaskHandler):
         cmd = build_command(template, entry.filepath, part_output_path)
         ctx.logger.debug(f"执行 FFmpeg 命令: {cmd}")
 
+        # get_media_info 阶段已探测到有效时长（>0）时直接用作状态行总时长；
+        # 未探测或探测无时长时传 None，由 run_ffmpeg 从 stderr 启动横幅兜底嗅探
+        probe_duration = entry.media_info["duration"] if entry.media_info else 0.0
+
         ensure_dir(final_dest_dir)
         # 先清理上次崩溃残留的同名 part 文件（对齐 fs/atomic 的先清后建），
         # 此后 part 文件必为本轮产物，失败清理无需比对既有文件
@@ -422,6 +426,7 @@ class FFmpegTaskHandler(BaseTaskHandler):
                 logger=ctx.logger,
                 coordinator=ctx.lifecycle,
                 timeout=config.ffmpeg_timeout,
+                total_duration=probe_duration if probe_duration > 0 else None,
             )
         except TransferAbortedError:
             # fast 停止：写入中的 part 文件必不完整，尽力清理后向上传播

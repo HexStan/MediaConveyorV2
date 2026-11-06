@@ -115,6 +115,48 @@ class TestFFmpegTask:
         # 改名复原后子目录结构与最终文件名不受影响
         assert snapshot(os.path.join(task["dest_dir"], "sub", "dir")) == {"a-encoded.mp4": 7}
 
+    def test_probe_duration_drives_status_line(self, run_task, tmp_path, stub_ffmpeg, monkeypatch):
+        """get_media_info 探测到的时长优先驱动状态行：横幅即使在场也不参与解析。"""
+        monkeypatch.setattr("src.core.media.ffmpeg.execute._PROGRESS_LOG_INTERVAL", 0)
+
+        def fake_run(cmd, **kwargs):
+            result = type("R", (), {})()
+            result.returncode = 0
+            result.stdout = '{"format": {"duration": "30.0"}, "streams": []}'
+            return result
+
+        # duration 过滤触发探测：探测不到时长（0）时文件会被筛掉，借此
+        # 保证进入处理的文件必已携带探测时长
+        monkeypatch.setattr("src.core.media.probe.subprocess.run", fake_run)
+        _calls, fstate = stub_ffmpeg
+        fstate["hangs"] = True
+        fstate["output"] = (
+            b"Input #0, mov,mp4,m4a,3gp,3gpp,mj2, from 'input.mp4':\n"
+            b"  Duration: 00:00:08.40, start: 0.000000, bitrate: 8543 kb/s\n"
+        )
+        fstate["progress"] = (
+            b"frame=10\nfps=2.0\nbitrate=128.0kbits/s\ntotal_size=2048\n"
+            b"out_time=00:00:01.000000\ndup_frames=0\ndrop_frames=0\nspeed=2.0x\n"
+            b"progress=continue\n"
+        )
+        task = ffmpeg_task(
+            tmp_path / "src",
+            tmp_path / "dest",
+            filter={"duration": {"min": "10s"}},
+            ffmpeg_timeout=0.3,
+        )
+        make_tree(task["source_dir"], {"a.mp4": b"video"})
+
+        run_task(task, now=NOW)
+
+        ctx = AppContext.get()
+        progress_logs = [m for lv, m in ctx.logger.messages if lv == "info" and "进行中" in m]
+        assert progress_logs
+        # 探测值 30 秒生效（out_time = 1 秒）；横幅的 8.40 不再生效
+        # （锚定输出时间戳分母位，避免与预计总耗时估算撞形）
+        assert any("输出时间戳：00:01 / 00:30" in m for m in progress_logs)
+        assert not any("输出时间戳：00:01 / 00:08" in m for m in progress_logs)
+
     def test_passthrough_moves_directly(self, run_task, tmp_path, stub_ffmpeg):
         calls, _fstate = stub_ffmpeg
         task = ffmpeg_task(tmp_path / "src", tmp_path / "dest", passthrough_patterns=["*.srt"])

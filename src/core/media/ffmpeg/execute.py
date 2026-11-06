@@ -11,7 +11,9 @@ progress 模块）经 logger 输出——raw 模式落笔（不带时间戳头�
 progress=end 的快照在进程结束后追加一次终写状态行（绕过节流），
 异常结束（失败 / 超时 / fast 中止，不会有 end 块）不追加，最后一行
 进度原样保留；终态由终写进度行承载，无独立的运行报告输出。媒体总
-时长取自 stderr 启动横幅的 Duration 行（progress.parse_banner_duration）。
+时长优先取调用方传入的探测值（get_media_info 阶段的 ffprobe 结果），
+未探测或探测无时长时自 stderr 启动横幅嗅探
+（progress.parse_banner_duration）。
 """
 
 import queue
@@ -130,6 +132,7 @@ def run_ffmpeg(
     logger: Logger,
     coordinator: LifecycleCoordinator,
     timeout: float = 0,
+    total_duration: float | None = None,
 ) -> bool:
     """执行拼接完成的 ffmpeg 命令；返回是否成功。
 
@@ -140,9 +143,10 @@ def run_ffmpeg(
     - 超时：timeout > 0 时超时终止进程树，按失败处理（返回 False）；
     - 进度：progress 协议块解析渲染后经 logger 输出（raw，不带时间戳
       头部，30 秒节流，输出时间戳的分母与「持续时间」预计总时长的
-      估算均以 stderr 启动横幅解析的媒体总时长为准）；progress=end 的
-      快照在进程结束后追加一次终写状态行，异常结束（失败/超时/中止）
-      不追加，最后一行进度原样保留。
+      估算均以媒体总时长为准：优先取 total_duration 传入的探测值，
+      未探测或探测无时长（None）时自 stderr 启动横幅嗅探）；
+      progress=end 的快照在进程结束后追加一次终写状态行，异常结束
+      （失败/超时/中止）不追加，最后一行进度原样保留。
     """
     start_time = time.time()
     try:
@@ -165,7 +169,8 @@ def run_ffmpeg(
     last_progress: FFmpegProgress | None = None
     finished_line: str | None = None  # progress=end 时刻的终写行
     last_progress_log = 0.0
-    total_duration: float | None = None  # stderr 启动横幅解析出的媒体总时长（秒）
+    # 媒体总时长（秒）：初始为调用方传入的探测值，None 时自 stderr
+    # 启动横幅兜底嗅探（嗅探守卫见主循环）
 
     try:
         while True:
@@ -207,7 +212,8 @@ def run_ffmpeg(
                 continue
 
             error_output.append(line)
-            # 横幅嗅探是被动的：时长行仍原样进错误缓冲，失败尾部报告不受影响
+            # 横幅嗅探是被动的（仅在无探测值时兜底生效）：时长行仍原样
+            # 进错误缓冲，失败尾部报告不受影响
             if total_duration is None:
                 total_duration = parse_banner_duration(line)
     finally:
