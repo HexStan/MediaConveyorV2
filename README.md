@@ -157,7 +157,7 @@ output_filename = "{basename}-encoded.mp4"   # 【必填】输出文件名模板
 
 > 选择 A1/A2 时 `backup_dir` 会被忽略（启动时记录警告）；`backup_dir` 不得位于源/目标目录之内。
 
-### 第五步：文件稳定性检测
+### 第五步：文件稳定性检测与处理顺序
 
 **源目录中的文件是否可能正在被写入（例如正在下载、拷贝中）？**
 
@@ -165,6 +165,19 @@ output_filename = "{basename}-encoded.mp4"   # 【必填】输出文件名模板
 |------|------|
 | **是**，文件可能处于写入中 | `stable_duration = 5`（等待 5 秒后复查文件大小是否变化。有变化则跳过，本轮不处理，按需调整秒数） |
 | **否**，所有文件都是完整的 | `stable_duration = 0`（默认） |
+
+**是否在意同一轮内多个待处理文件的先后顺序？**
+
+待处理文件清单确定后按 `process_order` 排序逐个处理（直传文件与 FFmpeg 处理文件在同一队列中一起排序）；大小、时间或路径相同的平局保持扫描顺序。
+
+| 需求 | 配置 |
+|------|------|
+| **不在意**，保持扫描顺序（目录名排序后深度优先遍历） | `process_order = "default"`（默认） |
+| **按文件路径的字典序**（大小写不敏感） | `process_order = "alphabetic"` |
+| **先处理大文件**（如尽早释放磁盘空间） | `process_order = "largest_first"` |
+| **先处理小文件**（如尽快出结果） | `process_order = "smallest_first"` |
+| **先处理最新的文件** | `process_order = "newest_first"` |
+| **先处理最旧的文件** | `process_order = "oldest_first"` |
 
 ### 第六步：文件过滤（可选）
 
