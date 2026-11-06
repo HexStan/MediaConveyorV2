@@ -73,7 +73,7 @@ wheels = [
 
 [[package]]
 name = "mediaconveyor"
-version = "0.5.1.dev0"
+version = "0.5.2.dev0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
