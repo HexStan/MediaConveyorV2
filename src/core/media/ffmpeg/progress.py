@@ -1,12 +1,13 @@
 """FFmpeg progress 协议：块解析与中文进度行渲染。
 
 渲染语义（三种输出形态共用的唯一格式，见 format_progress）：
-「持续时间」以「已运行 / ETA」两段显示，ETA 以平均速率法估算剩余
-墙钟时间（见 _format_eta）；输出时间戳以「out_time / 总时长」两段
-显示；媒体总时长由 execute 模块从 stderr 启动横幅嗅探
-（parse_banner_duration，首个可解析者生效），未知（横幅缺失、模板
-含 -hide_banner、管道输入等）时退化为占位符；横幅为完整输入时长，
-模板含 -ss / -t 裁剪时分母与估算偏大（见 _format_eta）。
+「持续时间」以「已运行 / 预计总耗时」两段显示，预计总耗时以平均
+速率法估算（已运行 + 预计剩余，见 _format_estimated_total）；输出
+时间戳以「out_time / 总时长」两段显示；媒体总时长由 execute 模块
+从 stderr 启动横幅嗅探（parse_banner_duration，首个可解析者生效），
+未知（横幅缺失、模板含 -hide_banner、管道输入等）时退化为占位符；
+横幅为完整输入时长，模板含 -ss / -t 裁剪时分母与估算偏大
+（见 _format_estimated_total）。
 """
 
 from dataclasses import dataclass
@@ -132,23 +133,27 @@ def parse_banner_duration(line: str) -> float | None:
     return seconds if seconds is not None and seconds > 0 else None
 
 
-def _format_eta(progress: FFmpegProgress, elapsed: float, total_duration: float | None) -> str:
-    """按开局以来的平均处理速率推算剩余墙钟时间（恒 MM:SS，分钟位不封顶）。
+def _format_estimated_total(
+    progress: FFmpegProgress, elapsed: float, total_duration: float | None
+) -> str:
+    """按开局以来的平均处理速率推算预计总墙钟时间（恒 MM:SS，分钟位不封顶）。
 
     平均速率 = 已处理媒体时长（out_time）÷ 已运行墙钟时间，恒以累计值
     计算：不依赖 ffmpeg speed 字段的版本语义（瞬时 / 累计不一），30 秒
-    渲染节流下数值平滑。end 快照恒为 00:00；已处理时长尚未产出
-    （out_time 缺失 / 为 0 / 为负）或总时长未知时以占位符表示。
+    渲染节流下数值平滑。预计总耗时 = 已运行 + 预计剩余（out_time 超过
+    总时长时剩余钳为 0，预计总耗时收敛为已运行）；end 快照即实际已运行
+    时长。已处理时长尚未产出（out_time 缺失 / 为 0 / 为负）或总时长
+    未知时以占位符表示。
     """
     if progress.progress == "end":
-        return _format_timer(0)
+        return _format_timer(elapsed)
     out_seconds = _parse_hhmmss(progress.out_time)
     if out_seconds is None or out_seconds <= 0:
         return _PROGRESS_PLACEHOLDER
     if total_duration is None or total_duration <= 0:
         return _PROGRESS_PLACEHOLDER
     remaining = max(0.0, total_duration - out_seconds)
-    return _format_timer(elapsed * remaining / out_seconds)
+    return _format_timer(elapsed + elapsed * remaining / out_seconds)
 
 
 def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: float | None) -> str:
@@ -156,7 +161,7 @@ def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: fl
 
     total_duration 为 execute 从 stderr 启动横幅解析出的媒体总时长
     （秒）：作为输出时间戳的分母显示（未知为占位符），并供
-    「持续时间」字段的 ETA 估算，见 _format_eta。
+    「持续时间」字段的预计总时长估算，见 _format_estimated_total。
     """
     size = (
         fmt_size(progress.total_size, binary=True)
@@ -164,9 +169,10 @@ def format_progress(progress: FFmpegProgress, elapsed: float, total_duration: fl
         else _PROGRESS_PLACEHOLDER
     )
     state = _PROGRESS_STATE.get(progress.progress, progress.progress)
+    estimated = _format_estimated_total(progress, elapsed, total_duration)
     fields = [
         state,
-        f"持续时间：{_format_timer(elapsed)} / {_format_eta(progress, elapsed, total_duration)}",
+        f"持续时间：{_format_timer(elapsed)} / {estimated}",
         f"输出时间戳：{_format_out_time(progress.out_time)} / {_format_duration(total_duration)}",
         f"当前帧：{progress.frame or _PROGRESS_PLACEHOLDER}",
         f"码率：{progress.bitrate or _PROGRESS_PLACEHOLDER}",

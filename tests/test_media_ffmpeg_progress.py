@@ -73,13 +73,13 @@ class TestFormatProgress:
         )
 
         assert format_progress(progress, elapsed=12.4, total_duration=8.4) == (
-            "进行中 | 持续时间：00:12 / 00:12 | 输出时间戳：00:04 / 00:08 | 当前帧：168 "
+            "进行中 | 持续时间：00:12 / 00:24 | 输出时间戳：00:04 / 00:08 | 当前帧：168 "
             "| 码率：512.3kbits/s | 体积：1.0 MiB | 帧率：42.13 | 速率：1.05x "
             "| 复制帧：0 | 丢弃帧：0"
         )
 
     def test_end_state_and_missing_fields(self):
-        """end 汉化为已完成；N/A 与缺失字段统一为占位符；ETA 恒为 00:00。"""
+        """end 汉化为已完成；N/A 与缺失字段统一为占位符；第二段为实际已运行时长。"""
         progress = FFmpegProgress(
             progress="end",
             frame="",
@@ -97,15 +97,23 @@ class TestFormatProgress:
             "| 体积：-- | 帧率：-- | 速率：-- | 复制帧：-- | 丢弃帧：--"
         )
 
-    def test_eta_placeholder_when_duration_unknown(self):
-        """总时长未知（启动横幅未解析到）：ETA 为占位符。"""
+    def test_end_state_shows_actual_elapsed_as_total(self):
+        """end 快照的第二段为实际已运行时长（真实总耗时），不依赖字段在场。"""
+        progress = parse_progress_block(["out_time=N/A", "progress=end"])
+
+        assert progress is not None
+        line = format_progress(progress, elapsed=65.0, total_duration=70.0)
+        assert "持续时间：01:05 / 01:05" in line
+
+    def test_estimated_total_placeholder_when_duration_unknown(self):
+        """总时长未知（启动横幅未解析到）：预计总时长为占位符。"""
         progress = parse_progress_block(["out_time=00:00:04.200000", "progress=continue"])
 
         assert progress is not None
         line = format_progress(progress, elapsed=12.4, total_duration=None)
         assert "持续时间：00:12 / --" in line
 
-    def test_eta_placeholder_before_first_output(self):
+    def test_estimated_total_placeholder_before_first_output(self):
         """out_time 尚未产出（缺失 / N/A / 为零 / 负起始偏移）：占位符。"""
         for out_time in ("", "N/A", "00:00:00.000000", "-00:00:00.020000"):
             progress = parse_progress_block([f"out_time={out_time}", "progress=continue"])
@@ -114,13 +122,13 @@ class TestFormatProgress:
             line = format_progress(progress, elapsed=12.4, total_duration=8.4)
             assert "持续时间：00:12 / --" in line, out_time
 
-    def test_eta_clamps_to_zero_when_out_time_exceeds_duration(self):
-        """out_time 超过总时长（非零起始偏移等）：剩余钳为 0。"""
+    def test_estimated_total_converges_to_elapsed_when_out_time_exceeds_duration(self):
+        """out_time 超过总时长（非零起始偏移等）：剩余钳为 0，预计总耗时收敛为已运行。"""
         progress = parse_progress_block(["out_time=00:00:08.400000", "progress=continue"])
 
         assert progress is not None
         line = format_progress(progress, elapsed=12.4, total_duration=4.2)
-        assert "持续时间：00:12 / 00:00" in line
+        assert "持续时间：00:12 / 00:12" in line
 
     def test_timer_clamps_negative_elapsed(self):
         progress = parse_progress_block(["progress=continue"])

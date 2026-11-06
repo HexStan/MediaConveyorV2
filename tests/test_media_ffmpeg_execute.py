@@ -56,8 +56,8 @@ class TestRunFFmpeg:
         finished = [m for lv, m in capture_log.messages if lv == "info" and "已完成" in m]
         assert len(finished) == 1
 
-    def test_end_record_carries_zero_eta(self, stub_ffmpeg, capture_log):
-        """终写行的 ETA 恒为 00:00（总时长是否在场不影响）。"""
+    def test_end_record_carries_elapsed_as_total(self, stub_ffmpeg, capture_log):
+        """终写行第二段为实际已运行时长（真实总耗时；stub 极快，取整为 00:00）。"""
         _calls, state = stub_ffmpeg
         state["progress"] = _continue_block() + _end_block()
 
@@ -118,7 +118,7 @@ class TestRunFFmpeg:
         assert len(progress_logs) >= 2
 
     def test_banner_duration_feeds_eta(self, stub_ffmpeg, capture_log, monkeypatch):
-        """stderr 启动横幅的 Duration 行被嗅探为总时长，持续时间字段估算 ETA。"""
+        """stderr 启动横幅的 Duration 行被嗅探为总时长，持续时间字段估算预计总时长。"""
         monkeypatch.setattr("src.core.media.ffmpeg.execute._PROGRESS_LOG_INTERVAL", 0)
         _calls, state = stub_ffmpeg
         state["hangs"] = True
