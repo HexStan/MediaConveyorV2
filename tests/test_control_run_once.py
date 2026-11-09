@@ -27,7 +27,7 @@ from src.app.instance import (
 @pytest.fixture
 def unique_name():
     """全局临时目录里的一次性实例标识，测试结束自动清理运行时文件。"""
-    name = f"smartarchiver-test-{uuid.uuid4().hex}"
+    name = f"mediaconveyor-test-{uuid.uuid4().hex}"
     yield name
     paths = instance_paths(name)
     for path in (paths.lock, paths.pid, paths.ctl, paths.state):
@@ -81,31 +81,21 @@ def test_wait_run_once_accepted_ignores_stale_ack(capture_log, unique_name):
     stale_ts = time.time() - 10
     with SingleInstance(unique_name, capture_log):
         write_state(unique_name, PHASE_SLEEPING, last_run_once=stale_ts)
-        assert not control._wait_run_once_accepted(unique_name, stale_ts + 1, timeout=0.3)
+        assert not control._wait_run_once_accepted(
+            unique_name, stale_ts + 1, timeout=0.3, poll_interval=0.05
+        )
 
 
 def test_wait_run_once_accepted_times_out_without_ack(capture_log, unique_name):
     with SingleInstance(unique_name, capture_log):
         write_state(unique_name, PHASE_SLEEPING)
         started = time.monotonic()
-        assert not control._wait_run_once_accepted(unique_name, time.time(), timeout=0.3)
+        assert not control._wait_run_once_accepted(
+            unique_name, time.time(), timeout=0.3, poll_interval=0.05
+        )
         assert time.monotonic() - started >= 0.3
 
 
 def test_wait_run_once_accepted_stops_when_instance_exits(unique_name):
     """实例中途退出立即终止等待，不等满时限。"""
     assert not control._wait_run_once_accepted(unique_name, time.time(), timeout=1.0)
-
-
-# ============================================================
-# 子命令入口
-# ============================================================
-
-
-def test_cmd_run_once_rejects_server_mode(capsys):
-    """服务器模式没有调度循环，run-once 直接拒绝（exit 2）。"""
-    with pytest.raises(SystemExit) as exc_info:
-        control.cmd_run_once(is_server=True)
-
-    assert exc_info.value.code == 2
-    assert "不支持服务器实例" in capsys.readouterr().out

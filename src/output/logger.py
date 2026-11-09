@@ -102,7 +102,7 @@ class DailyRotatingFileHandler(logging.FileHandler):
         self,
         log_dir: str,
         max_log_files: int,
-        prefix: str = "smartarchiver",
+        prefix: str = "mediaconveyor",
         encoding: str = "utf-8",
     ) -> None:
         self.log_dir = log_dir
@@ -133,7 +133,7 @@ def setup_logger(
     log_dir: str,
     max_log_files: int = 0,
     log_level: str = "INFO",
-    prefix: str = "smartarchiver",
+    prefix: str = "mediaconveyor",
     console: bool = True,
     bridge_loggers: tuple[str, ...] = (),
 ) -> LoggerWrapper:
@@ -200,7 +200,7 @@ def setup_logger(
     return LoggerWrapper(logger)
 
 
-def clean_old_logs(log_dir: str, max_files: int, prefix: str = "smartarchiver") -> None:
+def clean_old_logs(log_dir: str, max_files: int, prefix: str = "mediaconveyor") -> None:
     """
     清理旧日志文件，只保留最近的 max_files 个
     """

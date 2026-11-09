@@ -3,28 +3,23 @@
 加载期完成所有"仅凭配置文件本身即可判定"的合法性校验（Pydantic 模型）：
 - bootstrap 段（BootstrapConfig：log_dir / max_log_files / log_level），
   在日志系统就位前消费，失败走 print + exit 通道；
-- 全局段（GlobalConfig：[schedule]、服务器数值段）；
-- http/ssh 远端条目（remote.factory / ssh.remotes）；
-- 任务条目（core.task_plan.resolve_tasks：任务模型 + dest + 依赖静态校验）。
+- 全局段（GlobalConfig：[schedule]）；
+- 任务条目（core.task_plan.resolve_tasks：任务模型 + 交叉约束 + 依赖静态校验）。
 
 校验失败分两类：全局/结构错误 → ConfigError（致命：启动期干净退出、
-热重载回退备份）；单任务/单远端条目错误 → 记日志跳过该条目，不致命。
+热重载回退备份）；单任务条目错误 → 记日志跳过该条目，不致命。
 """
 
 import os
 import shutil
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from src.core.task_plan import TaskSpec, resolve_tasks
 from src.output.logger import Logger
-from src.remote import parse_remote_config
-from src.remote.client import RemoteClient
-from src.ssh import parse_ssh_remote_config
-from src.ssh.remotes import SshRemote
 from src.validation import format_validation_error
 
 
@@ -33,7 +28,7 @@ class ConfigError(Exception):
 
 
 class ScheduleConfig(BaseModel):
-    """[schedule] 配置块模型；仅客户端调度路径消费（_run_schedule）。
+    """[schedule] 配置块模型；仅调度路径消费（_run_schedule）。
 
     mode 不用 Literal：错误文案需逐字可控（Literal 的默认报错文案
     不满足），validator 抛出的 ValueError 经 format_validation_error
@@ -67,22 +62,12 @@ class ScheduleConfig(BaseModel):
 class GlobalConfig(BaseModel):
     """顶层全局配置段（未声明的配置键忽略）。
 
-    客户端消费 schedule；服务器消费 api_key/port/并发段
-    （run_server 由 runtime 注入具体值）。数值约束在加载期收口——
-    非法值致命（ConfigError）。
+    数值约束在加载期收口——非法值致命（ConfigError）。
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    # 客户端全局
     schedule: ScheduleConfig | None = None
-    # 服务器段（服务器模式启动期经 run_server 消费）
-    api_key: str = ""
-    port: int = Field(default=13579, ge=1, le=65535)
-    max_concurrent_metadata: int = Field(default=1, ge=1)
-    max_concurrent_uploads: int = Field(default=1, ge=1)
-    max_queue_metadata: int = Field(default=32, ge=0)
-    max_queue_uploads: int = Field(default=32, ge=0)
 
 
 class BootstrapConfig(BaseModel):
@@ -96,6 +81,7 @@ class BootstrapConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     log_dir: str = "./logs"
+    data_dir: str = "./data"
     max_log_files: int = Field(default=0, ge=0)
     log_level: str = "INFO"
 
@@ -121,8 +107,6 @@ class ConfigData:
 
     config: GlobalConfig
     tasks: list[TaskSpec]
-    remote_clients: dict[str, RemoteClient] = field(default_factory=dict)
-    ssh_remotes: dict[str, SshRemote] = field(default_factory=dict)
     used_backup: bool = False
 
 
@@ -188,7 +172,7 @@ class ConfigManager:
     # -- internal ------------------------------------------------------------
 
     def _process(self, config: dict[str, Any], save_backup: bool = False) -> ConfigData:
-        """加载流程核心：验证 → 解析远端与任务 → 保存备份 → 更新 mtime。"""
+        """加载流程核心：验证 → 解析任务 → 保存备份 → 更新 mtime。"""
         self._validate_structure(config)
 
         try:
@@ -196,19 +180,11 @@ class ConfigManager:
         except ValidationError as e:
             raise ConfigError(f"全局配置无效：{format_validation_error(e)}") from e
 
-        remote_clients = parse_remote_config(config, self._logger)
-        ssh_remotes = parse_ssh_remote_config(config, self._logger)
-
         raw_tasks_value = config.get("tasks", [])
         raw_tasks: list[Any] = raw_tasks_value if isinstance(raw_tasks_value, list) else []
         if not isinstance(raw_tasks_value, list):
             self._logger.error("tasks 配置应为任务数组，已忽略全部任务。")
-        tasks = resolve_tasks(
-            raw_tasks,
-            logger=self._logger,
-            http_aliases=remote_clients.keys(),
-            ssh_aliases=ssh_remotes.keys(),
-        )
+        tasks = resolve_tasks(raw_tasks, logger=self._logger)
 
         if save_backup:
             self._save_backup()
@@ -216,13 +192,7 @@ class ConfigManager:
         self._last_mtime = self._get_mtime()
         self._logger.info("配置文件加载成功。")
 
-        return ConfigData(
-            config=root,
-            tasks=tasks,
-            remote_clients=remote_clients,
-            ssh_remotes=ssh_remotes,
-            used_backup=False,
-        )
+        return ConfigData(config=root, tasks=tasks, used_backup=False)
 
     def _load_backup(self) -> ConfigData:
         """加载备份配置（致命失败会向上抛出）。"""

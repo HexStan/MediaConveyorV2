@@ -1,4 +1,4 @@
-"""加载期任务解析：模型校验、id/depends_on 静态校验与 dest 装配校验。
+"""加载期任务解析：模型校验与 id/depends_on 静态校验。
 
 职责边界：本模块在配置加载期完成所有"仅凭配置文件即可判定"的任务级
 校验，产出与 tasks 列表索引对齐的 TaskSpec（config 为 None 表示被拒绝
@@ -7,7 +7,7 @@ app.runtime 的任务循环完成。逐任务配置错误沿用项目惯例：�
 跳过该任务（blocked），不致命。
 
 id 规则：
-- 选填；合法字符集为 a-z、A-Z、0-9、-、_（与远端 alias 一致）；
+- 选填；合法字符集为 a-z、A-Z、0-9、-、_；
 - 非法（类型错误/字符不符）视为无 id：任务照常执行，不可被依赖——
   降级而非拒绝，故不走模型校验，在本模块归一；
 - 与前方任务重复时报错并跳过该任务——若静默降级为"无 id 照常跑"，
@@ -20,13 +20,12 @@ depends_on 规则：
   报错并跳过该任务（配置顺序即执行顺序，依赖只是门禁）。
 """
 
-from collections.abc import Collection
+import os
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from pydantic import ValidationError
 
-from src.core import dest
-from src.core.task_config import TASK_MODELS, SyncTaskConfig, TaskConfig
+from src.core.task_config import TaskConfig
 from src.validation import ALIAS_PATTERN, format_validation_error
 
 if TYPE_CHECKING:
@@ -121,43 +120,76 @@ def _has_unresolvable_reference(
     return False
 
 
-def _dispatch_mode(entry: dict[str, Any], index: int, logger: Logger) -> type[TaskConfig] | None:
-    """按 mode 分派配置模型；mode 缺失/不支持时记错误并返回 None。
+def _norm_path(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
 
-    mode 大小写不敏感，归一化后写回 entry 供模型校验；
-    缺失与不支持各记一条 error。
+
+def _is_within(child: str, ancestor: str) -> bool:
+    """child 路径是否等于或位于 ancestor 之内（大小写/分隔符归一后判定）。"""
+    child_path = _norm_path(child)
+    ancestor_path = _norm_path(ancestor)
+    if child_path == ancestor_path:
+        return True
+    try:
+        return os.path.commonpath([child_path, ancestor_path]) == ancestor_path
+    except ValueError:
+        # 不同盘符（Windows）等无公共祖先的情形
+        return False
+
+
+def _validate_paths(config: TaskConfig, index: int, logger: Logger) -> bool:
+    """目录位置关系的跨字段校验；返回 False 表示任务应被拒绝。
+
+    - dest_dir 不得等于或位于 source_dir 之内，source_dir 也不得位于
+      dest_dir 之内：任务输出写入扫描树会形成"输出再被扫描"的反馈回路；
+    - backup_dir / failure_dir 不得位于 source_dir/dest_dir 之内：善后
+      移动会与源树/输出树互相破坏，failure_dir 位于源树内还会因失败
+      记录随移动清零而陷入"失败 → 移走 → 重扫 → 再失败"的死循环；
+    - failure_dir 不得等于 backup_dir：成功归档与失败隔离混放会互相
+      覆盖同名文件。
     """
-    raw_mode = entry.get("mode")
-    if raw_mode is None:
-        logger.error(f"任务 #{index + 1} 缺少 mode 字段，跳过该任务。")
-        return None
-    if not isinstance(raw_mode, str):
-        logger.error(f"任务 #{index + 1} 不支持的任务模式: {raw_mode!r}，跳过该任务。")
-        return None
-    mode = raw_mode.lower()
-    model_cls = TASK_MODELS.get(mode)
-    if model_cls is None:
-        logger.error(f"任务 #{index + 1} 不支持的任务模式: {mode}，跳过该任务。")
-        return None
-    entry["mode"] = mode
-    return model_cls
+    if _is_within(config.dest_dir, config.source_dir) or _is_within(
+        config.source_dir, config.dest_dir
+    ):
+        logger.error(
+            f"任务 #{index + 1} 的 dest_dir 与 source_dir 不得相同或存在嵌套关系，跳过该任务。"
+        )
+        return False
+
+    for field_name in ("backup_dir", "failure_dir"):
+        target = getattr(config, field_name)
+        if target and (
+            _is_within(target, config.source_dir) or _is_within(target, config.dest_dir)
+        ):
+            logger.error(
+                f"任务 #{index + 1} 的 {field_name} 不得位于 source_dir 或 dest_dir 之内，跳过该任务。"
+            )
+            return False
+
+    if (
+        config.failure_dir
+        and config.backup_dir
+        and _norm_path(config.failure_dir) == _norm_path(config.backup_dir)
+    ):
+        logger.error(f"任务 #{index + 1} 的 failure_dir 与 backup_dir 不得相同，跳过该任务。")
+        return False
+
+    return True
 
 
 def resolve_tasks(
     raw_tasks: list[Any],
     *,
     logger: Logger,
-    http_aliases: Collection[str],
-    ssh_aliases: Collection[str],
 ) -> list[TaskSpec]:
     """解析任务列表，产出与索引对齐的 TaskSpec（含全部校验日志）。
 
     第一遍逐任务做 id 规范化与注册（仅合法 id，先到先得——注册反映
     "配置中声明的 id"，与任务自身合法性解耦：被拒绝任务声明的 id 仍可
-    被引用，运行期依赖门禁自然级联）、mode 分派、depends_on 类型归一、
-    配置模型校验与 dest / backup_dir 装配校验；第二遍在全部合法 id 注册
-    完毕后做引用校验（存在性 / 自引用 / 前向引用）。两遍产出与
-    raw_tasks 一一对应的 draft，最终按序返回。
+    被引用，运行期依赖门禁自然级联）、depends_on 类型归一、配置模型
+    校验与跨字段约束校验；第二遍在全部合法 id 注册完毕后做
+    引用校验（存在性 / 自引用 / 前向引用）。两遍产出与 raw_tasks
+    一一对应的 draft，最终按序返回。
     """
     drafts: list[TaskSpec] = []
     registered: dict[str, int] = {}  # id → 首个出现的任务索引
@@ -167,7 +199,7 @@ def resolve_tasks(
             drafts.append(TaskSpec(None))
             continue
 
-        # 浅拷贝：归一化需要写回（mode / id / depends_on），不污染调用方的原始字典
+        # 浅拷贝：归一化需要写回（id / depends_on），不污染调用方的原始字典
         entry = dict(raw)
 
         task_id = _normalize_id(entry, index, logger)
@@ -181,39 +213,28 @@ def resolve_tasks(
         if task_id is not None:
             registered[task_id] = index
 
-        model_cls = _dispatch_mode(entry, index, logger)
-        if model_cls is None:
-            drafts.append(TaskSpec(None))
-            continue
-
         depends_on = _normalize_depends_on(entry, index, logger)
         if depends_on is None:
             drafts.append(TaskSpec(None))
             continue
 
         try:
-            config = model_cls.model_validate(entry)
+            config = TaskConfig.model_validate(entry)
         except ValidationError as e:
             logger.error(f"任务 #{index + 1} 配置无效，跳过该任务：{format_validation_error(e)}")
             drafts.append(TaskSpec(None))
             continue
 
-        reason = dest.validate_dest(
-            config.dest, config.mode, http_aliases=http_aliases, ssh_aliases=ssh_aliases
-        )
-        if reason is not None:
-            logger.error(f"任务 #{index + 1} 的 dest 配置无效：{reason}，跳过该任务。")
+        if not _validate_paths(config, index, logger):
             drafts.append(TaskSpec(None))
             continue
-
-        # backup_dir 与 source/dest 的位置关系是跨字段语义校验，仅 sync 模式
-        # 存在该字段（dest 的模式兼容性已由 validate_dest 收口）
-        if isinstance(config, SyncTaskConfig):
-            reason = dest.validate_backup_dir(config.dest, config.source, config.backup_dir)
-            if reason is not None:
-                logger.error(f"任务 #{index + 1} 的 backup_dir 配置无效：{reason}，跳过该任务。")
-                drafts.append(TaskSpec(None))
-                continue
+        if config.remove_source and config.backup_dir:
+            logger.warning(f"任务 #{index + 1} 配置了 remove_source = true，backup_dir 将被忽略。")
+        if config.failure_dir and config.failure_count == 0:
+            logger.warning(
+                f"任务 #{index + 1} 配置了 failure_dir，但 failure_count = 0"
+                "（永不因失败跳过），failure_dir 将不会被使用。"
+            )
 
         drafts.append(TaskSpec(config, task_id, depends_on))
 

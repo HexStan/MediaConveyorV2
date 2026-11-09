@@ -51,7 +51,7 @@ with SingleInstance(sys.argv[1], QuietLogger()):
 
 def _unique_instance_name():
     """系统临时目录是全局共享的，用随机名避免与其他进程/测试互扰。"""
-    return f"smartarchiver-test-{uuid.uuid4().hex}"
+    return f"mediaconveyor-test-{uuid.uuid4().hex}"
 
 
 def _lock_path(instance_name):
@@ -169,7 +169,7 @@ def test_blank_instance_name_uses_default():
 
 def test_path_style_instance_name_falls_back_to_default():
     """路径写法非法：回退默认标识并标记。"""
-    assert resolve_instance_name("/tmp/smartarchiver", DEFAULT_INSTANCE_NAME) == (
+    assert resolve_instance_name("/tmp/mediaconveyor", DEFAULT_INSTANCE_NAME) == (
         DEFAULT_INSTANCE_NAME,
         True,
     )

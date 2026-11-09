@@ -1,27 +1,20 @@
-"""共享校验基建：远端别名类型、别名正则与校验错误中文格式化。
+"""共享校验基建：标识符正则与校验错误中文格式化。
 
 pydantic 相关的跨包共享词汇统一收口于此。本模块与 fs/ 平级，是仅依赖
 pydantic 与标准库的叶子模块，所有包可导入（分层约定见 AGENTS.md）。
 
 设计约束：
 - format_validation_error 只输出字段定位与中文错误短语，绝不输出
-  ``err["input"]`` 原值——http_remotes 的 key 是 API 密钥，落入日志即泄露；
+  ``err["input"]`` 原值，防止配置中的敏感值落入日志；
 - 用户可见的错误短语保持中文，与项目日志惯例一致。
 """
 
 import re
-from typing import Annotated
 
-from pydantic import StringConstraints, ValidationError
+from pydantic import ValidationError
 
-# 远端别名与任务 id 共用的合法字符集：a-z、A-Z、0-9、-、_
-# （别名是 dest 协议串 "{类型:别名}?" 的组成部分，任务 id 是依赖引用的 key）
+# 任务 id 等标识符共用的合法字符集：a-z、A-Z、0-9、-、_
 ALIAS_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+$")
-
-RemoteAlias = Annotated[
-    str,
-    StringConstraints(pattern=r"^[a-zA-Z0-9_\-]+$", strip_whitespace=True, min_length=1),
-]
 
 # pydantic 错误类型 → 中文短语；未收录类型回退 pydantic 原生 msg
 _ERROR_TYPE_MESSAGES: dict[str, str] = {

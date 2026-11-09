@@ -1,41 +1,31 @@
 services:
-  client:
-    image: ghcr.io/hexstan/smartarchiver:latest
-    container_name: smart-archiver
+  media-conveyor:
+    image: ghcr.io/hexstan/mediaconveyorv2:latest
+    container_name: media-conveyor-v2
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+
     volumes:
+      # 配置文件与运行时数据目录
       - ./config:/app/config
       - ./logs:/app/logs
-      # - ./ssh/id_ed25519:/root/.ssh/id_ed25519
-      # - ./ssh/pass:/root/.ssh/pass
+      - ./data:/app/data
+
+      # 媒体生命周期目录
       - ./source:/app/source
       - ./dest:/app/dest
+      - ./backup:/app/backup
+      - ./failed:/app/failed
 
-#  server:
-#    image: ghcr.io/hexstan/smartarchiver:latest
-#    container_name: sa-server
-#    restart: unless-stopped
-#    command: ["--server"]
-#    environment:
-#      - TZ=Asia/Shanghai
-#    ports:
-#      - "13579:13579"
-#    volumes:
-#      - ./config/config.server.toml:/app/config/config.server.toml
-#      - ./logs:/app/logs
-#      - ./dest:/app/dest
-#
-#  ssh-server:
-#    image: ghcr.io/hexstan/sa-ssh-server:latest
-#    container_name: sa-ssh-server
-#    restart: unless-stopped
-#    ports:
-#      - "2222:22"
-#    # environment:
-#    #   - ROOT_PASSWORD=your_secure_password
-#    #   - AUTHORIZED_KEYS=ssh-rsa AAAA...
-#    volumes:
-#      - /path/to/data:/data
-#      - ./ssh/authorized_keys:/root/.ssh/authorized_keys
+    # 启用 Intel/AMD GPU 支持 (VAAPI/QSV)
+    devices:
+      - /dev/dri:/dev/dri
+    # 启用 NVIDIA GPU 支持
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu, video, compute, utility]

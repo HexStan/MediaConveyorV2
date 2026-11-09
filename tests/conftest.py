@@ -2,16 +2,22 @@
 
 分层策略与编写原则见 tests/README.md。本文件只提供三类设施：
 - 捕获型日志替身（记录不拦截）；
-- AppContext 装配（真实 HistoryManager + 捕获日志，测试后清理单例）；
+- AppContext 装配（真实 StateManager + 捕获日志，测试后清理单例）；
 - run_task 灰盒入口（从 handler.execute() 驱动被测代码）。
 """
+
+import io
+import os
+import subprocess
 
 import pytest
 
 from src.app.config import GlobalConfig
 from src.app.context import AppContext
-from src.core.history import HistoryManager
-from src.core.registry import create_handler
+from src.core.handlers import create_handler
+from src.core.media.ffmpeg import execute as ffmpeg_execute
+from src.core.media.ffmpeg.command import FFMPEG_PART_PREFIX
+from src.core.state import StateManager
 from src.core.task_plan import resolve_tasks
 
 
@@ -55,13 +61,92 @@ def capture_log():
 
 @pytest.fixture
 def app_context(tmp_path, capture_log):
-    """装配全局 AppContext：捕获日志 + 真实 HistoryManager（写入 tmp 目录）。"""
-    history_dir = tmp_path / "history"
-    history_dir.mkdir()
-    history = HistoryManager(str(history_dir))
-    AppContext.init(capture_log, history, GlobalConfig())
+    """装配全局 AppContext：捕获日志 + 真实 StateManager（写入 tmp 目录）。"""
+    state = StateManager(str(tmp_path / "state.db"))
+    AppContext.init(capture_log, GlobalConfig(), state=state)
     yield AppContext.get()
+    state.close()
     AppContext._instance = None
+
+
+@pytest.fixture(autouse=True)
+def _reset_handler_class_state():
+    """清理处理器的类级提示去重状态（源目录告警），保证测试互不污染。"""
+    from src.core.handlers.ffmpeg_task import FFmpegTaskHandler
+
+    FFmpegTaskHandler._warned_dirs.clear()
+    yield
+    FFmpegTaskHandler._warned_dirs.clear()
+
+
+class FakePopen:
+    """模拟 ffmpeg 子进程：stderr（错误输出）与 stdout（progress 块）按
+    chunk 输出，退出码可配置。"""
+
+    def __init__(self, returncode=0, output=b"", progress=b"", hangs=False):
+        self.stderr = io.BytesIO(output)
+        self.stdout = io.BytesIO(progress)
+        self.returncode = None if hangs else returncode
+        self.pid = 4321
+        self._hangs = hangs
+        self.waited = False
+
+    def poll(self):
+        return None if self._hangs else self.returncode
+
+    def wait(self, timeout=None):
+        self.waited = True
+        if self._hangs:
+            # 现实中 terminate 后进程退出；测试里以退出码收尾
+            self.returncode = self.returncode or -9
+        return self.returncode
+
+
+@pytest.fixture
+def stub_ffmpeg(monkeypatch):
+    """进程边界打桩（tests/README.md 原则三）：记录传给 ffmpeg 的命令行。
+
+    - ``calls``：收到的完整命令行列表；
+    - ``state``：可配置的返回行为（returncode / output / progress / hangs /
+      on_start，on_start 在子进程"启动"时调用，可用来模拟 ffmpeg 写出
+      半成品文件）。``output`` 为 stderr 的错误输出，``progress`` 为
+      stdout 的 progress 协议块。
+    - 成功退出（returncode == 0 且未配置 on_start）时模拟 ffmpeg 的产出：
+      向命令行末尾的 part 路径（``{output}`` 的填充值）写出内容，处理器
+      随后的改名善后才有真实对象可操作。
+    """
+    calls: list[str] = []
+    state = {
+        "returncode": 0,
+        "output": b"",
+        "progress": b"",
+        "on_start": None,
+        "hangs": False,
+    }
+
+    def fake_popen(cmd, **kwargs):
+        calls.append(cmd)
+        if state["on_start"] is not None:
+            state["on_start"](cmd)
+        elif state["returncode"] == 0 and not state["hangs"]:
+            # {output} 的填充值位于命令行末尾（剥去平台引号）；仅当它是
+            # part 路径时才写出，避免单元测试的裸命令被误当路径
+            output_path = cmd.rstrip().rsplit(None, 1)[-1].strip("\"'")
+            if os.path.basename(output_path).startswith(FFMPEG_PART_PREFIX):
+                with open(output_path, "wb") as f:
+                    f.write(b"encoded")
+        return FakePopen(
+            returncode=state["returncode"],
+            output=state["output"],
+            progress=state["progress"],
+            hangs=state["hangs"],
+        )
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(ffmpeg_execute, "_POLL_INTERVAL", 0.05)
+    # 超时终止走真实协调器 → 进程树终止打桩为无副作用
+    monkeypatch.setattr("src.app.lifecycle.terminate_process_tree", lambda pid, logger=None: True)
+    return calls, state
 
 
 @pytest.fixture
@@ -70,28 +155,17 @@ def run_task(app_context):
 
     用法::
 
-        handler = run_task({"mode": "move", "source": ..., ...}, now=NOW)
+        handler = run_task({"source_dir": ..., "dest_dir": ..., ...}, now=NOW)
 
     与生产装配路径对齐：任务字典先经加载期解析（resolve_tasks——任务
-    模型校验、dest 装配校验，错误日志在此给出，被拒绝的任务返回 None），
+    模型校验，错误日志在此给出，被拒绝的任务返回 None），
     再经 create_handler 构造并执行。返回 handler 实例，可读取 stats 做
-    补充断言。远端连接参数通过 remote_clients / ssh_remotes 注入（写入
-    AppContext，供加载期 dest 别名校验与 core.dest 转发层取用，见
-    test_greybox_sync.py）。
+    补充断言。
     """
 
-    def _run(task, now=None, remote_clients=None, ssh_remotes=None):
+    def _run(task, now=None):
         ctx = AppContext.get()
-        if remote_clients is not None:
-            ctx.remote_clients = remote_clients
-        if ssh_remotes is not None:
-            ctx.ssh_remotes = ssh_remotes
-        spec = resolve_tasks(
-            [task],
-            logger=ctx.logger,
-            http_aliases=ctx.remote_clients.keys(),
-            ssh_aliases=ctx.ssh_remotes.keys(),
-        )[0]
+        spec = resolve_tasks([task], logger=ctx.logger)[0]
         # 与生产 process_task 共用同一条装配路径，错误路径测试才是在测
         # 生产行为而不是测试替身。
         handler = create_handler(spec, now=now)

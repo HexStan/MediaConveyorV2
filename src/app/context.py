@@ -1,4 +1,4 @@
-"""应用上下文：通过模块级单例解耦 Logger 和 HistoryManager 的传递"""
+"""应用上下文：通过模块级单例解耦 Logger、StateManager 等运行期单件的传递"""
 
 from typing import TYPE_CHECKING
 
@@ -8,11 +8,9 @@ if TYPE_CHECKING:
     # 类型级依赖（运行时零导入）：core 包的 __init__ 会级联注册 handlers，
     # handlers.base 反向依赖本模块，运行时导入会造成循环
     from src.app.config import GlobalConfig
-    from src.core.history import HistoryManager
+    from src.core.state import StateManager
     from src.core.task_plan import TaskSpec
     from src.output.logger import Logger
-    from src.remote.client import RemoteClient
-    from src.ssh.remotes import SshRemote
 
 
 class AppContext:
@@ -22,16 +20,12 @@ class AppContext:
     def init(
         cls,
         logger: Logger,
-        history_mgr: HistoryManager,
         config: GlobalConfig,
         tasks: list[TaskSpec] | None = None,
-        remote_clients: dict[str, RemoteClient] | None = None,
-        ssh_remotes: dict[str, SshRemote] | None = None,
+        state: StateManager | None = None,
         instance_name: str = "",
     ) -> None:
-        cls._instance = cls(
-            logger, history_mgr, config, tasks, remote_clients, ssh_remotes, instance_name
-        )
+        cls._instance = cls(logger, config, tasks, state, instance_name)
 
     @classmethod
     def get(cls) -> AppContext:
@@ -42,37 +36,32 @@ class AppContext:
     def __init__(
         self,
         logger: Logger,
-        history_mgr: HistoryManager,
         config: GlobalConfig,
         tasks: list[TaskSpec] | None = None,
-        remote_clients: dict[str, RemoteClient] | None = None,
-        ssh_remotes: dict[str, SshRemote] | None = None,
+        state: StateManager | None = None,
         instance_name: str = "",
     ) -> None:
         self.logger = logger
-        self.history_mgr = history_mgr
         # 全局配置（加载期已校验的 GlobalConfig 模型）
         self.config = config
         # 加载期解析完成的任务编排信息（config=None 表示被拒绝的任务）
         self.tasks: list[TaskSpec] = tasks if tasks is not None else []
-        self.remote_clients = remote_clients or {}
-        self.ssh_remotes = ssh_remotes or {}
+        # 文件处理状态库（SQLite）：防重复处理 / 失败计数 / fallback 切换。
+        # 生产装配必传入；允许 None 仅为兼容未接入状态库的最小测试装配，
+        # 业务处理器应通过 require_state() 取用
+        self.state = state
         # 实例标识名：锁文件 / 控制文件 / PID 文件 / 日志前缀的公共基名
         self.instance_name = instance_name
         # 生命周期协调器：ControlWatcher 注入停止与 run-once 指令，
         # 业务循环在边界查询
         self.lifecycle = LifecycleCoordinator()
 
-    def update_config(
-        self,
-        config: GlobalConfig,
-        tasks: list[TaskSpec],
-        remote_clients: dict[str, RemoteClient] | None = None,
-        ssh_remotes: dict[str, SshRemote] | None = None,
-    ) -> None:
+    def require_state(self) -> StateManager:
+        """取状态库；未装配时给出明确错误（而非散落各处的 None 解引用）。"""
+        if self.state is None:
+            raise RuntimeError("AppContext 未装配 StateManager（AppContext.init 缺少 state 参数）")
+        return self.state
+
+    def update_config(self, config: GlobalConfig, tasks: list[TaskSpec]) -> None:
         self.config = config
         self.tasks = tasks
-        if remote_clients is not None:
-            self.remote_clients = remote_clients
-        if ssh_remotes is not None:
-            self.ssh_remotes = ssh_remotes

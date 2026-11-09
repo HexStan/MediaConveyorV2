@@ -6,6 +6,9 @@
 文件系统与捕获日志为断言对象（tests/README.md 原则二：白盒补外部
 不可见的盲区）。停止与 run-once 指令经 LifecycleCoordinator 注入——
 与 ControlWatcher 注入的真实信号同源，不另设桩。
+
+观察"任务已执行"的终态：编排任务配置 passthrough_patterns = ["*"]，
+执行 = 文件直传进目标目录，无需真实 FFmpeg。
 """
 
 import os
@@ -41,16 +44,16 @@ def wait_until(condition, timeout=EXECUTE_TIMEOUT):
     return condition()
 
 
-def move_task(tmp_path):
-    """默认 move 任务：dest 预创建（生产前置条件）。"""
+def ffmpeg_task(tmp_path):
+    """直传观察任务：dest 预创建（生产前置条件）。"""
     task = {
-        "mode": "move",
-        "source": str(tmp_path / "src"),
-        "dest": str(tmp_path / "dest"),
-        "mtime_threshold_seconds": 0,
-        "remove_empty_dirs": False,
+        "source_dir": str(tmp_path / "src"),
+        "dest_dir": str(tmp_path / "dest"),
+        "ffmpeg_cmd": "ffmpeg -i {input} {output}",
+        "output_filename": "{basename}.mp4",
+        "filter": {"passthrough_patterns": ["*"]},
     }
-    os.makedirs(task["dest"], exist_ok=True)
+    os.makedirs(task["dest_dir"], exist_ok=True)
     return task
 
 
@@ -62,16 +65,23 @@ def start_schedule(app_context, tmp_path, task, schedule_config):
     为空操作）。
     """
     ctx = AppContext.get()
-    specs = resolve_tasks([task], logger=ctx.logger, http_aliases=(), ssh_aliases=())
-    ctx.update_config(GlobalConfig(), specs, {}, {})
+    specs = resolve_tasks([task], logger=ctx.logger)
+    ctx.update_config(GlobalConfig(), specs)
 
     config_path = tmp_path / "config.toml"
-    source = task["source"].replace("\\", "/")
-    dest = task["dest"].replace("\\", "/")
+    source = task["source_dir"].replace("\\", "/")
+    dest = task["dest_dir"].replace("\\", "/")
     mode = schedule_config["mode"]
+    schedule_lines = [f'[schedule]\nmode = "{mode}"']
+    if "cron_expr" in schedule_config:
+        schedule_lines.append(f'cron_expr = "{schedule_config["cron_expr"]}"')
+    if "interval_seconds" in schedule_config:
+        schedule_lines.append(f"interval_seconds = {schedule_config['interval_seconds']}")
     config_path.write_text(
-        f'[schedule]\nmode = "{mode}"\n\n[[tasks]]\n'
-        f'source = "{source}"\ndest = "{dest}"\nmode = "move"\n',
+        "\n".join(schedule_lines)
+        + "\n\n[[tasks]]\n"
+        + f'source_dir = "{source}"\ndest_dir = "{dest}"\n'
+        + '\n[tasks.filter]\npassthrough_patterns = ["*"]\n',
         encoding="utf-8",
     )
     manager = ConfigManager(str(config_path), app_context.logger)
@@ -94,7 +104,7 @@ def stop_and_join(app_context, thread):
 @pytest.fixture
 def unique_instance(app_context):
     """一次性实例标识并注入 AppContext：状态文件写入系统临时目录，测试后清理。"""
-    name = f"smartarchiver-test-{uuid.uuid4().hex}"
+    name = f"mediaconveyor-test-{uuid.uuid4().hex}"
     app_context.instance_name = name
     yield name
     paths = instance_paths(name)
@@ -110,19 +120,19 @@ def _state_phase_is(name, phase):
 
 class TestFirstRunDelay:
     def test_interval_first_run_delay_zero_executes_immediately(self, app_context, tmp_path):
-        task = move_task(tmp_path)
-        make_tree(task["source"], {"a.txt": b"alpha"})
+        task = ffmpeg_task(tmp_path)
+        make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600, "first_run_delay": 0}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
 
         try:
-            assert wait_until(lambda: snapshot(task["dest"]) == {"a.txt": 5}), (
+            assert wait_until(lambda: snapshot(task["dest_dir"]) == {"a.txt": 5}), (
                 "first_run_delay=0 时首轮任务未立即执行"
             )
         finally:
             stop_and_join(app_context, thread)
         assert not thread.is_alive()
-        assert snapshot(task["source"]) == {}
+        assert snapshot(task["source_dir"]) == {}
 
     def test_interval_first_run_delay_positive_defers_first_round(
         self, app_context, tmp_path, unique_instance
@@ -135,8 +145,8 @@ class TestFirstRunDelay:
         first_run_delay=0 测试（到点→执行）与 run-once 唤醒测试（睡眠
         打断→执行）夹逼，此处不再以真实墙钟覆盖流逝路径。
         """
-        task = move_task(tmp_path)
-        make_tree(task["source"], {"a.txt": b"alpha"})
+        task = ffmpeg_task(tmp_path)
+        make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600, "first_run_delay": 30}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
 
@@ -144,7 +154,7 @@ class TestFirstRunDelay:
             assert wait_until(lambda: _state_phase_is(unique_instance, PHASE_SLEEPING)), (
                 "first_run_delay>0 时调度线程未进入休眠相位"
             )
-            assert snapshot(task["dest"]) == {}
+            assert snapshot(task["dest_dir"]) == {}
             assert not app_context.logger.has("info", "脚本开始执行……")
             # next_run = 写入时刻 + 延迟，写入必先于读取：上界天然成立；
             # 紧窗口同时钉死"用了 30 而非 0 / -1 / 3600"
@@ -155,12 +165,12 @@ class TestFirstRunDelay:
             stop_and_join(app_context, thread)  # 唤醒事件即刻打断 30s 睡眠，不真等
         assert not thread.is_alive()
         # 未到延迟终点即停止：任务从未执行，源树原样保留
-        assert snapshot(task["source"]) == {"a.txt": 5}
-        assert snapshot(task["dest"]) == {}
+        assert snapshot(task["source_dir"]) == {"a.txt": 5}
+        assert snapshot(task["dest_dir"]) == {}
 
     def test_cron_first_run_delay_zero_executes_immediately(self, app_context, tmp_path):
-        task = move_task(tmp_path)
-        make_tree(task["source"], {"a.txt": b"alpha"})
+        task = ffmpeg_task(tmp_path)
+        make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "cron", "cron_expr": "* * * * *", "first_run_delay": 0}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
 
@@ -187,8 +197,8 @@ class TestFirstRunDelay:
     def test_interval_without_first_run_delay_waits_for_next_tick(
         self, app_context, tmp_path, unique_instance
     ):
-        task = move_task(tmp_path)
-        make_tree(task["source"], {"a.txt": b"alpha"})
+        task = ffmpeg_task(tmp_path)
+        make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
 
@@ -198,7 +208,7 @@ class TestFirstRunDelay:
             assert wait_until(lambda: _state_phase_is(unique_instance, PHASE_SLEEPING)), (
                 "默认 first_run_delay 下调度线程未进入休眠相位"
             )
-            assert snapshot(task["dest"]) == {}
+            assert snapshot(task["dest_dir"]) == {}
             assert not app_context.logger.has("info", "脚本开始执行……")
             # 睡眠终点是整整一个周期之后，而非"现在"（钉死"等待至下个调度点"）
             state = read_state(unique_instance)
@@ -207,8 +217,8 @@ class TestFirstRunDelay:
             stop_and_join(app_context, thread)
         assert not thread.is_alive()
         # 未到调度点：任务未执行，源树原样保留
-        assert snapshot(task["source"]) == {"a.txt": 5}
-        assert snapshot(task["dest"]) == {}
+        assert snapshot(task["source_dir"]) == {"a.txt": 5}
+        assert snapshot(task["dest_dir"]) == {}
 
 
 class TestRunOnce:
@@ -236,8 +246,8 @@ class TestRunOnce:
     def test_run_once_interrupts_interval_sleep_and_recomputes_next_run(
         self, app_context, tmp_path, unique_instance
     ):
-        task = move_task(tmp_path)
-        make_tree(task["source"], {"a.txt": b"alpha"})
+        task = ffmpeg_task(tmp_path)
+        make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
 
@@ -248,7 +258,7 @@ class TestRunOnce:
             )
             sent_ts = time.time()
             assert app_context.lifecycle.request_run_now(sent_ts)
-            assert wait_until(lambda: snapshot(task["dest"]) == {"a.txt": 5}), (
+            assert wait_until(lambda: snapshot(task["dest_dir"]) == {"a.txt": 5}), (
                 "run-once 未立即触发执行"
             )
             # 下次运行时间按执行后的当前时刻重算（约 now+3600），状态文件同步投影
@@ -260,11 +270,11 @@ class TestRunOnce:
         finally:
             stop_and_join(app_context, thread)
         assert not thread.is_alive()
-        assert snapshot(task["source"]) == {}
+        assert snapshot(task["source_dir"]) == {}
 
     def test_run_once_interrupts_cron_sleep(self, app_context, tmp_path, unique_instance):
-        task = move_task(tmp_path)
-        make_tree(task["source"], {"a.txt": b"alpha"})
+        task = ffmpeg_task(tmp_path)
+        make_tree(task["source_dir"], {"a.txt": b"alpha"})
         # 每月 1 日零点：休眠期足够长，执行与否完全取决于 run-once 唤醒
         schedule = {"mode": "cron", "cron_expr": "0 0 1 * *"}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
@@ -272,31 +282,31 @@ class TestRunOnce:
         try:
             assert wait_until(lambda: _state_phase_is(unique_instance, PHASE_SLEEPING))
             assert app_context.lifecycle.request_run_now(time.time())
-            assert wait_until(lambda: snapshot(task["dest"]) == {"a.txt": 5}), (
+            assert wait_until(lambda: snapshot(task["dest_dir"]) == {"a.txt": 5}), (
                 "run-once 未立即触发执行"
             )
         finally:
             stop_and_join(app_context, thread)
         assert not thread.is_alive()
-        assert snapshot(task["source"]) == {}
+        assert snapshot(task["source_dir"]) == {}
 
     def test_run_once_interrupts_first_run_delay(self, app_context, tmp_path, unique_instance):
         """first_run_delay 等待期视为休眠期：run-once 可提前触发首轮。"""
-        task = move_task(tmp_path)
-        make_tree(task["source"], {"a.txt": b"alpha"})
+        task = ffmpeg_task(tmp_path)
+        make_tree(task["source_dir"], {"a.txt": b"alpha"})
         schedule = {"mode": "interval", "interval_seconds": 3600, "first_run_delay": 30}
         thread, _, _ = start_schedule(app_context, tmp_path, task, schedule)
 
         try:
             assert wait_until(lambda: _state_phase_is(unique_instance, PHASE_SLEEPING))
             assert app_context.lifecycle.request_run_now(time.time())
-            assert wait_until(lambda: snapshot(task["dest"]) == {"a.txt": 5}), (
+            assert wait_until(lambda: snapshot(task["dest_dir"]) == {"a.txt": 5}), (
                 "run-once 未提前触发首轮任务"
             )
         finally:
             stop_and_join(app_context, thread)
         assert not thread.is_alive()
-        assert snapshot(task["source"]) == {}
+        assert snapshot(task["source_dir"]) == {}
 
 
 class TestScheduleConfig:

@@ -37,14 +37,14 @@ _RUN_ONCE_IGNORED_HINT = (
 )
 
 
-def _load_control_context(is_server: bool, strict: bool = False) -> tuple[str, str]:
+def _load_control_context(strict: bool = False) -> tuple[str, str]:
     """控制子命令的配置读取，返回 (instance_name, log_dir)。
 
     与运行路径不同，这里不做完整校验，只解析实例标识与日志目录。
     strict=True（start）时配置缺失或解析失败直接退出；宽松模式
     （log/stop）回退默认实例标识与日志目录，保证配置异常时依然可用。
     """
-    path = paths.config_path(is_server)
+    path = paths.config_path()
     raw_config: dict[str, Any] = {}
     if os.path.exists(path):
         try:
@@ -60,7 +60,7 @@ def _load_control_context(is_server: bool, strict: bool = False) -> tuple[str, s
             sys.exit(1)
         print(f"警告: 配置文件 {path} 未找到，按默认实例标识处理。")
 
-    instance_name, invalid = instance.resolve_identity(raw_config, is_server)
+    instance_name, invalid = instance.resolve_identity(raw_config)
     if invalid:
         print(f"警告: instance_name 配置值非法，按默认实例标识 {instance_name} 处理。")
     # 宽松模式：log_dir 仅做类型守卫回退，
@@ -70,20 +70,17 @@ def _load_control_context(is_server: bool, strict: bool = False) -> tuple[str, s
     return instance_name, paths.resolve_log_dir(log_dir)
 
 
-def _command_hint(is_server: bool) -> str:
+def _command_hint() -> str:
     prog = os.path.basename(sys.argv[0]) or "main.py"
-    suffix = " --server" if is_server else ""
-    return f"{prog}{suffix}"
+    return prog
 
 
-def _spawn_detached(is_server: bool) -> int:
+def _spawn_detached() -> int:
     """以脱离终端的方式拉起自身，返回子进程 PID。"""
     if paths.is_frozen():
         cmd = [sys.executable]
     else:
         cmd = [sys.executable, os.path.join(paths.app_base_dir(), "main.py")]
-    if is_server:
-        cmd.append("--server")
 
     env = os.environ.copy()
     env[instance.DETACHED_ENV] = "1"
@@ -117,12 +114,12 @@ def _spawn_detached(is_server: bool) -> int:
     return proc.pid
 
 
-def _follow_logs(is_server: bool, lines: int = 100) -> None:
+def _follow_logs(lines: int = 100) -> None:
     """滚动显示运行日志，底部状态栏显示实例存活状态。
 
     Ctrl+C 结束跟随（不影响实例运行）。
     """
-    instance_name, log_dir = _load_control_context(is_server)
+    instance_name, log_dir = _load_control_context()
 
     def _probe_status() -> tuple[bool, int | None]:
         return instance.is_running(instance_name), instance.read_pid(instance_name)
@@ -134,21 +131,21 @@ def _follow_logs(is_server: bool, lines: int = 100) -> None:
         pass
 
 
-def cmd_start(is_server: bool, quiet: bool = False) -> None:
+def cmd_start(quiet: bool = False) -> None:
     """start 子命令：脱离终端启动实例，随后滚动显示运行日志。
 
     --quiet 时不进入日志跟随：轮询实例锁确认子进程已启动（锁在运行
     路径初始化完成后才获取，被持有即启动确认），输出一行确认后返回；
     超时未确认按失败退出。
     """
-    instance_name, _log_dir = _load_control_context(is_server, strict=True)
+    instance_name, _log_dir = _load_control_context(strict=True)
     if instance.is_running(instance_name):
         pid = instance.read_pid(instance_name)
         where = f" (PID {pid})" if pid else ""
         print(f"已有同名实例正在运行{where}，无需重复启动。")
         sys.exit(1)
 
-    pid = _spawn_detached(is_server)
+    pid = _spawn_detached()
     if quiet:
         try:
             started = _wait_instance_started(instance_name)
@@ -160,39 +157,33 @@ def cmd_start(is_server: bool, quiet: bool = False) -> None:
         else:
             print(
                 f"Error: 等待启动确认超时（{_START_CONFIRM_TIMEOUT:g} 秒），"
-                f"实例可能启动失败。可执行 {_command_hint(is_server)} log 查看运行日志。",
+                f"实例可能启动失败。可执行 {_command_hint()} log 查看运行日志。",
                 file=sys.stderr,
             )
             sys.exit(1)
         return
 
-    print(
-        f"实例已在后台启动，本终端可随时退出。如要停止运行请执行 {_command_hint(is_server)} stop。"
-    )
+    print(f"实例已在后台启动，本终端可随时退出。如要停止运行请执行 {_command_hint()} stop。")
     print("正在滚动显示运行日志……\n")
-    _follow_logs(is_server)
+    _follow_logs()
 
 
-def cmd_log(is_server: bool, lines: int) -> None:
-    _follow_logs(is_server, lines)
+def cmd_log(lines: int) -> None:
+    _follow_logs(lines)
 
 
-def cmd_stop(is_server: bool, fast: bool, slow: bool) -> None:
+def cmd_stop(fast: bool, slow: bool) -> None:
     """stop 子命令：向运行实例发送停止指令并等待退出。
 
     静默设计：发送与等待过程不播报，实例日志是唯一进度来源；
     仅在无实例与出错时输出，退出确认统一为一行"实例已退出。"。
     """
-    if is_server and (fast or slow):
-        print("server 模式的 stop 命令不支持 --fast 和 --slow。")
-        sys.exit(2)
-
-    instance_name, _log_dir = _load_control_context(is_server)
+    instance_name, _log_dir = _load_control_context()
     if not instance.is_running(instance_name):
         print("没有正在运行的实例。")
         return
 
-    if is_server or fast:
+    if fast:
         mode = instance.STOP_FAST
     elif slow:
         mode = instance.STOP_SLOW
@@ -243,7 +234,7 @@ def _run_once_blocker(instance_name: str) -> str | None:
 
 
 def _wait_instance_started(
-    instance_name: str, timeout: float | None = None, poll_interval: float = 0.1
+    instance_name: str, timeout: float | None = None, poll_interval: float = 0.5
 ) -> bool:
     """轮询实例锁，确认分离式子进程已获锁运行（``start --quiet`` 的确认信号）。
 
@@ -262,7 +253,10 @@ def _wait_instance_started(
 
 
 def _wait_run_once_accepted(
-    instance_name: str, sent_ts: float, timeout: float | None = None
+    instance_name: str,
+    sent_ts: float,
+    timeout: float | None = None,
+    poll_interval: float = 0.5,
 ) -> bool:
     """轮询状态文件，等待受理回执（``last_run_once >= sent_ts``）。
 
@@ -281,11 +275,11 @@ def _wait_run_once_accepted(
             ack = state.get("last_run_once")
             if isinstance(ack, (int, float)) and ack >= sent_ts:
                 return True
-        time.sleep(0.1)
+        time.sleep(poll_interval)
     return False
 
 
-def cmd_run_once(is_server: bool, quiet: bool = False) -> None:
+def cmd_run_once(quiet: bool = False) -> None:
     """run-once 子命令：让处于调度休眠期的实例立即执行一轮任务。
 
     预检（存活 + 休眠期）通过后投递指令并等待受理回执，随后进入
@@ -293,11 +287,7 @@ def cmd_run_once(is_server: bool, quiet: bool = False) -> None:
     返回，未受理打印提示到 stderr 后按失败退出。实例正处于执行期的
     竞态窗口内到达的指令会被静默忽略，等待超时给出提示。
     """
-    if is_server:
-        print("run-once 命令不支持服务器实例。")
-        sys.exit(2)
-
-    instance_name, _log_dir = _load_control_context(is_server)
+    instance_name, _log_dir = _load_control_context()
     if (reason := _run_once_blocker(instance_name)) is not None:
         print(reason)
         sys.exit(1)
@@ -318,4 +308,4 @@ def cmd_run_once(is_server: bool, quiet: bool = False) -> None:
     if not accepted:
         print(_RUN_ONCE_IGNORED_HINT)
     print("正在滚动显示运行日志……\n")
-    _follow_logs(is_server)
+    _follow_logs()

@@ -1,1 +1,1 @@
-"""SmartArchiver source package."""
+"""MediaConveyor source package."""

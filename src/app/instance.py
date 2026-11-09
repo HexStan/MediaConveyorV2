@@ -67,7 +67,7 @@ PHASE_RUNNING = "running"  # 正在执行一轮任务
 PHASES = (PHASE_STARTING, PHASE_SLEEPING, PHASE_RUNNING)
 
 # start 子命令标记分离式子进程的环境变量：子进程据此关闭控制台输出
-DETACHED_ENV = "SMARTARCHIVER_DETACHED"
+DETACHED_ENV = "MEDIACONVEYOR_DETACHED"
 
 
 # ============================================================
@@ -75,8 +75,7 @@ DETACHED_ENV = "SMARTARCHIVER_DETACHED"
 # ============================================================
 
 # instance_name 未配置或非法时使用的默认实例标识
-DEFAULT_INSTANCE_NAME = "smartarchiver"
-DEFAULT_SERVER_INSTANCE_NAME = "smartarchiver-server"
+DEFAULT_INSTANCE_NAME = "mediaconveyor"
 
 
 def _lock_available() -> bool:
@@ -121,10 +120,9 @@ def resolve_instance_name(value: object, default_name: str) -> tuple[str, bool]:
     return default_name, False
 
 
-def resolve_identity(raw_config: dict[str, Any], is_server: bool = False) -> tuple[str, bool]:
+def resolve_identity(raw_config: dict[str, Any]) -> tuple[str, bool]:
     """从原始配置解析实例标识，返回 (标识, 是否非法回退默认)。"""
-    default = DEFAULT_SERVER_INSTANCE_NAME if is_server else DEFAULT_INSTANCE_NAME
-    return resolve_instance_name(raw_config.get("instance_name"), default)
+    return resolve_instance_name(raw_config.get("instance_name"), DEFAULT_INSTANCE_NAME)
 
 
 class InstancePaths:
@@ -322,7 +320,7 @@ def read_state(instance_name: str) -> dict[str, Any] | None:
 def wait_for_exit(
     instance_name: str,
     timeout: float | None = None,
-    poll_interval: float = 0.25,
+    poll_interval: float = 0.5,
     on_wait: Callable[[float], None] | None = None,
 ) -> bool:
     """阻塞等待实例退出（基于锁探测轮询），返回 True 表示已退出。
@@ -403,7 +401,7 @@ def terminate_process_tree(
     """终止进程树，不留孤儿进程。
 
     供 ``LifecycleCoordinator`` 在 fast 中止时终止外部同步进程
-    （rsync/rclone 可能派生子进程，只杀直接子进程会留下孤儿）。
+    （FFmpeg 等外部工具可能派生子进程，只杀直接子进程会留下孤儿）。
     """
     try:
         parent = psutil.Process(pid)

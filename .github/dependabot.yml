@@ -1,21 +1,48 @@
 version: 2
 
 updates:
-  # GitHub Actions（.github/workflows/*.yml）
+  # GitHub Actions（.github/workflows/*.yml）：全部 action 归入同一组，每周至多 1 个 PR
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    # 新版本发布 3 天后才提 PR，降低供应链风险（cooldown 不影响安全更新）
+    cooldown:
+      default-days: 3
     commit-message:
       prefix: ci
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
-  # Python 依赖（pyproject.toml 的 PEP 735 依赖组 runtime / dev / build + 锁文件 uv.lock）
+  # Python 依赖（pyproject.toml 的 PEP 735 依赖组 runtime / dev / build + 锁文件 uv.lock）：
+  # 按角色分两组，每周至多 2 个 PR ——
+  #   runtime：运行依赖连同配套类型存根（types-* 版本跟随对应库，需与库同组原子升级）
+  #   tooling：pytest / ruff / pyrefly / pyinstaller，升级最易影响 CI（如 pyrefly strict
+  #   新报错、ruff 默认规则集变化），隔离后故障不阻塞 runtime、便于定位与回退
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3
     commit-message:
       prefix: build
+    groups:
+      runtime:
+        patterns:
+          - "croniter"
+          - "humanize"
+          - "psutil"
+          - "pydantic"
+          - "types-*"
+      tooling:
+        patterns:
+          - "pytest"
+          - "ruff"
+          - "pyrefly"
+          - "pyinstaller"
 
   # 应用镜像（docker/app/Dockerfile）
   - package-ecosystem: docker
@@ -30,11 +57,3 @@ updates:
         update-types:
           - version-update:semver-major
           - version-update:semver-minor
-
-  # SSH 服务端镜像（docker/ssh-server/Dockerfile，基础镜像为 alpine:latest 无版本可跟）
-  - package-ecosystem: docker
-    directory: /docker/ssh-server
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: build

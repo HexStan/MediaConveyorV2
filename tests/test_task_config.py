@@ -1,345 +1,263 @@
-"""白盒测试：任务配置模型边界（task_config）。
+"""单元测试：FFmpeg 任务配置模型（加载期校验收口的契约）。
 
-为什么必须白盒（tests/README.md 原则二）：任务模型的字段级校验契约
-（类型 / 范围 / 模式级交叉约束 / 未知字段拒绝）在加载期一次性判定，
-从 handler.execute() 入口只能看到"任务被跳过"的终态，无法区分是哪条
-约束命中。参照 test_config_parsing.py 的风格：直接调用配置模型 +
-format_validation_error 断言中文消息。
-
-钉死的契约（Pydantic 模型校验的行为决策）：
-- 数字字段接受数字字符串（lax，与 http_remotes 数值字段一致），
-  布尔与不可解析值一律拒绝（pydantic v2 不做 bool → 数值强转之外，
-  布尔被显式排除以对齐既有"排除 bool"守卫）；
-- extra="forbid"：未知字段（拼写错误、不适配当前模式的字段）拒绝任务；
-- 模式级交叉约束：rotate 四类限额至少一项、sync 必填 dest、
-  rotate/sync 不接受 include_rules（模型不声明该字段）；
-- 中文错误文案逐字钉死（tool 配置值无效 / 数量配置值 / 至少一项 /
-  规则键上下文的容量错误）。
+钉死的契约：
+- source_dir / dest_dir / ffmpeg_cmd / output_filename 必填，
+  extra="forbid" 拒绝未知字段；
+- output_filename 模板仅支持 {basename}，渲染结果必须是纯文件名；
+- 数字字段接受数字字符串（lax 强转），布尔值一律拒绝；
+- process_order 枚举字段大小写不敏感，缺省为 default，非法取值报
+  中文错误；
+- 过滤条件的范围值在加载期解析：非法值得到明确的中文错误，而不是
+  运行期被静默当作 0；
+- 配置了 fallback_count 必须同时配置备用命令。
 """
 
 import pytest
 from pydantic import ValidationError
 
-from src.core.task_config import (
-    MoveCopyTaskConfig,
-    RotateRulesConfig,
-    RotateTaskConfig,
-    RuleSetConfig,
-    SyncTaskConfig,
-)
+from src.core.task_config import FilterConfig, TaskConfig
 from src.validation import format_validation_error
 
-GIB = 1024**3
 
-
-def _move(**extra):
+def make_task(**overrides) -> dict:
     task = {
-        "mode": "move",
-        "source": "s",
-        "dest": "d",
+        "source_dir": "./source",
+        "dest_dir": "./dest",
+        "ffmpeg_cmd": "-i {input} {output}",
+        "output_filename": "{basename}.mp4",
     }
-    task.update(extra)
+    task.update(overrides)
     return task
 
 
-def _rotate(**extra):
-    task = {"mode": "rotate", "source": "s", "count_limit": 1}
-    task.update(extra)
-    return task
+class TestRequiredFields:
+    def test_minimal_task(self):
+        config = TaskConfig.model_validate(make_task())
+
+        assert config.source_dir == "./source"
+        assert config.dest_dir == "./dest"
+        assert config.output_filename == "{basename}.mp4"
+        assert config.failure_count == 3
+        assert config.fallback_count == 0
+        assert config.ffmpeg_timeout == 0
+        assert config.stable_duration == 0
+        assert config.process_order == "default"
+        assert config.remove_source is False
+        assert config.source_expired_minutes == 0
+        assert config.backup_dir == ""
+        assert config.ffmpeg_cmd_fallback == ""
+
+    @pytest.mark.parametrize("field", ["source_dir", "dest_dir", "ffmpeg_cmd", "output_filename"])
+    def test_missing_required_field_rejected(self, field):
+        task = make_task()
+        del task[field]
+
+        with pytest.raises(ValidationError) as exc_info:
+            TaskConfig.model_validate(task)
+
+        message = format_validation_error(exc_info.value)
+        assert f"{field}: 缺少必填字段" in message
 
 
-def _sync(**extra):
-    task = {"mode": "sync", "source": "s", "dest": "d"}
-    task.update(extra)
-    return task
-
-
-def _format(model, data):
-    with pytest.raises(ValidationError) as exc_info:
-        model.model_validate(data)
-    return format_validation_error(exc_info.value)
-
-
-class TestMoveCopyTask:
-    def test_minimal_fields(self):
-        task = MoveCopyTaskConfig.model_validate(_move())
-
-        assert task.mode == "move"
-        assert task.id is None
-        assert task.name is None
-        assert task.dest == "d"
-        assert task.source_quiet_seconds == 0
-        assert task.conflict_policy == "skip"
-        assert task.max_retries == 3
-        # 两个原必填项改为选填后的默认值：无时间限制、不清理空目录
-        assert task.mtime_threshold_seconds == 0
-        assert task.remove_empty_dirs is False
-        assert not task.include_rules.has_rules
-        assert not task.exclude_rules.has_rules
-        assert not task.delete_rules.has_rules
-
+class TestFieldCoercion:
     def test_numeric_strings_coerced(self):
-        """数字字符串经 lax 强转（与 http_remotes 数值字段同一规则）。"""
-        task = MoveCopyTaskConfig.model_validate(
-            _move(mtime_threshold_seconds="10800", source_quiet_seconds="300")
+        config = TaskConfig.model_validate(
+            make_task(failure_count="5", stable_duration="10", source_expired_minutes="60")
         )
 
-        assert task.mtime_threshold_seconds == 10800.0
-        assert task.source_quiet_seconds == 300.0
+        assert config.failure_count == 5
+        assert config.stable_duration == 10.0
+        assert config.source_expired_minutes == 60.0
 
-    def test_bool_rejected(self):
-        """布尔值不是数值——"排除 bool"守卫同样在模型层生效。"""
-        message = _format(MoveCopyTaskConfig, _move(source_quiet_seconds=True))
-        assert "source_quiet_seconds" in message
-        assert "不接受布尔值" in message
+    def test_bool_rejected_for_numeric_fields(self):
+        with pytest.raises(ValidationError, match="不接受布尔值"):
+            TaskConfig.model_validate(make_task(failure_count=True))
 
-    def test_non_numeric_rejected(self):
-        message = _format(MoveCopyTaskConfig, _move(source_quiet_seconds="abc"))
-        assert "source_quiet_seconds" in message
-        assert "数值格式无效" in message
+        with pytest.raises(ValidationError, match="不接受布尔值"):
+            TaskConfig.model_validate(make_task(stable_duration=False))
 
-    def test_negative_mtime_rejected(self):
-        """负阈值加载期拒绝，不留隐晦语义。"""
-        message = _format(MoveCopyTaskConfig, _move(mtime_threshold_seconds=-5))
-        assert "mtime_threshold_seconds" in message
+    def test_negative_values_rejected(self):
+        with pytest.raises(ValidationError):
+            TaskConfig.model_validate(make_task(failure_count=-1))
 
-    def test_negative_quiet_rejected(self):
-        message = _format(MoveCopyTaskConfig, _move(source_quiet_seconds=-1))
-        assert "source_quiet_seconds" in message
+        with pytest.raises(ValidationError):
+            TaskConfig.model_validate(make_task(ffmpeg_timeout=-5))
 
-    def test_missing_required_field(self):
-        """mtime_threshold_seconds 等原必填项已有默认值，source 仍是必填。"""
-        data = _move()
-        del data["source"]
+    def test_unknown_fields_rejected(self):
+        with pytest.raises(ValidationError) as exc_info:
+            TaskConfig.model_validate(make_task(ffmpeg_command="x"))
 
-        message = _format(MoveCopyTaskConfig, data)
-        assert "source" in message
-        assert "缺少必填字段" in message
+        assert "ffmpeg_command: 不支持的字段" in format_validation_error(exc_info.value)
 
-    def test_empty_source_rejected(self):
-        message = _format(MoveCopyTaskConfig, _move(source=""))
-        assert "source" in message
-        assert "不能为空" in message
+    def test_multiline_cmd_preserved(self):
+        config = TaskConfig.model_validate(make_task(ffmpeg_cmd="-i {input} \\\n  {output}"))
 
-    def test_unknown_field_rejected(self):
-        """extra="forbid"：拼写错误（如 souce）显式拒绝，不静默失效。"""
-        message = _format(MoveCopyTaskConfig, _move(souce="x"))
-        assert "souce" in message
-        assert "不支持的字段" in message
-
-    def test_conflict_policy_case_insensitive(self):
-        task = MoveCopyTaskConfig.model_validate(_move(conflict_policy="Overwrite"))
-        assert task.conflict_policy == "overwrite"
-
-    def test_invalid_conflict_policy_rejected(self):
-        """非法冲突策略加载期拒绝，不静默吞掉。"""
-        message = _format(MoveCopyTaskConfig, _move(conflict_policy="merge"))
-        assert "conflict_policy" in message
-        assert "配置值无效" in message
-
-    def test_max_retries_numeric_string_coerced(self):
-        task = MoveCopyTaskConfig.model_validate(_move(max_retries="2"))
-        assert task.max_retries == 2
-
-    def test_negative_max_retries_rejected(self):
-        """max_retries 已下放为任务级配置：负值在任务模型层拒绝。"""
-        message = _format(MoveCopyTaskConfig, _move(max_retries=-1))
-        assert "max_retries" in message
-
-    def test_max_retries_bool_rejected(self):
-        message = _format(MoveCopyTaskConfig, _move(max_retries=True))
-        assert "max_retries" in message
-        assert "不接受布尔值" in message
+        assert "\n" in config.ffmpeg_cmd
 
 
-class TestRotateTask:
-    def test_size_limit_parsed(self):
-        task = RotateTaskConfig.model_validate(_rotate(size_limit="1GiB"))
-        assert task.size_limit == GIB
+class TestOutputFilenameValidation:
+    """output_filename 的加载期校验：占位符支持项与纯文件名形状。"""
 
-    def test_size_limit_minus_one_sentinel(self):
-        """-1 是"匹配所有大小"的哨兵值。"""
-        task = RotateTaskConfig.model_validate(_rotate(size_limit=-1))
-        assert task.size_limit == -1
+    def test_template_preserved(self):
+        config = TaskConfig.model_validate(make_task(output_filename="{basename}-encoded.mp4"))
 
-    def test_size_limit_empty_means_unlimited(self):
-        task = RotateTaskConfig.model_validate(_rotate(size_limit=""))
-        assert task.size_limit == 0
+        assert config.output_filename == "{basename}-encoded.mp4"
 
-    def test_invalid_size_limit_rejected(self):
-        message = _format(RotateTaskConfig, _rotate(size_limit="banana"))
-        assert "容量字符串 'banana' 无法解析" in message
+    def test_unknown_placeholder_rejected(self):
+        with pytest.raises(ValidationError, match="output_filename 模板"):
+            TaskConfig.model_validate(make_task(output_filename="{output}.mp4"))
 
-    def test_count_limit_numeric_string_coerced(self):
-        task = RotateTaskConfig.model_validate(_rotate(count_limit="20"))
-        assert task.count_limit == 20
+    def test_empty_braces_rejected(self):
+        with pytest.raises(ValidationError, match="output_filename 模板"):
+            TaskConfig.model_validate(make_task(output_filename="{}.mp4"))
 
-    def test_invalid_count_limit_message_pinned(self):
-        message = _format(RotateTaskConfig, _rotate(count_limit="banana"))
-        assert "count_limit 的数量配置值 'banana' 无效" in message
+    def test_path_separators_rejected(self):
+        with pytest.raises(ValidationError, match="纯文件名"):
+            TaskConfig.model_validate(make_task(output_filename="sub/{basename}.mp4"))
 
-    def test_negative_count_limit_rejected(self):
-        """负数显式拒绝（0 才是不限制）。"""
-        message = _format(RotateTaskConfig, _rotate(count_limit=-5))
-        assert "count_limit" in message
+        with pytest.raises(ValidationError, match="纯文件名"):
+            TaskConfig.model_validate(make_task(output_filename="..\\{basename}.mp4"))
 
-    def test_at_least_one_limit_message_pinned(self):
-        data = _rotate()
-        del data["count_limit"]
+    def test_dot_names_rejected(self):
+        with pytest.raises(ValidationError, match="纯文件名"):
+            TaskConfig.model_validate(make_task(output_filename=".."))
 
-        message = _format(RotateTaskConfig, data)
-        assert (
-            "rotate 模式下必须配置 size_limit、count_limit、"
-            "rotate_rules.size 或 rotate_rules.count 中的至少一项" in message
+
+class TestFallbackValidation:
+    def test_fallback_without_cmd_rejected(self):
+        with pytest.raises(ValidationError, match="必须同时配置 ffmpeg_cmd_fallback"):
+            TaskConfig.model_validate(make_task(fallback_count=3))
+
+    def test_fallback_with_cmd_accepted(self):
+        config = TaskConfig.model_validate(
+            make_task(fallback_count=3, ffmpeg_cmd_fallback="ffmpeg -fallback -i {input} {output}")
         )
 
-    def test_rotate_rules_only_count_satisfies_requirement(self):
-        task = RotateTaskConfig.model_validate(
-            {
-                "mode": "rotate",
-                "source": "s",
-                "rotate_rules": {"count": {"*.log": 10}},
-            }
-        )
-        assert task.rotate_rules.count == {"*.log": 10}
-
-    def test_rotate_rules_size_parsed(self):
-        task = RotateTaskConfig.model_validate(_rotate(rotate_rules={"size": {"logs/*": "10MiB"}}))
-        assert task.rotate_rules.size == {"logs/*": 10 * 1024 * 1024}
-
-    def test_include_rules_rejected(self):
-        """rotate 模式不接受 include_rules（模型不声明该字段，forbid 拒绝）。"""
-        message = _format(RotateTaskConfig, _rotate(include_rules={"ge": {"*.log": "-1"}}))
-        assert "include_rules" in message
-        assert "不支持的字段" in message
-
-    def test_conflict_policy_accepted(self):
-        task = RotateTaskConfig.model_validate(_rotate(conflict_policy="copy"))
-        assert task.conflict_policy == "copy"
-
-    def test_max_retries_accepted(self):
-        task = RotateTaskConfig.model_validate(_rotate(max_retries=5))
-        assert task.max_retries == 5
+        assert config.fallback_count == 3
 
 
-class TestSyncTask:
-    def test_minimal_fields(self):
-        task = SyncTaskConfig.model_validate(_sync())
+class TestProcessOrder:
+    """process_order 枚举字段：缺省值、大小写归一与非法取值报错。"""
 
-        assert task.tool == "auto"
-        assert task.exclude == []
-        assert task.exclude_from == []
-        assert task.backup_dir == ""
-        assert task.max_backups == 0
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "default",
+            "alphabetic",
+            "largest_first",
+            "smallest_first",
+            "newest_first",
+            "oldest_first",
+        ],
+    )
+    def test_valid_values_accepted(self, value):
+        config = TaskConfig.model_validate(make_task(process_order=value))
 
-    def test_backup_dir_kept(self):
-        task = SyncTaskConfig.model_validate(_sync(backup_dir="./backups"))
-        assert task.backup_dir == "./backups"
+        assert config.process_order == value
 
-    def test_dest_required(self):
-        data = _sync()
-        del data["dest"]
+    def test_value_case_insensitive(self):
+        config = TaskConfig.model_validate(make_task(process_order="Largest_First"))
 
-        message = _format(SyncTaskConfig, data)
-        assert "dest" in message
-        assert "缺少必填字段" in message
+        assert config.process_order == "largest_first"
 
-    def test_tool_case_insensitive_and_normalized(self):
-        task = SyncTaskConfig.model_validate(_sync(tool="Rsync"))
-        assert task.tool == "rsync"
+    def test_invalid_value_rejected(self):
+        with pytest.raises(ValidationError) as exc_info:
+            TaskConfig.model_validate(make_task(process_order="random"))
 
-    def test_invalid_tool_message_pinned(self):
-        message = _format(SyncTaskConfig, _sync(tool="scp"))
-        assert "sync 模式的 tool 配置值无效: 'scp'" in message
-        assert "可选值: auto、rsync、rclone" in message
+        message = format_validation_error(exc_info.value)
+        assert "process_order: 配置值无效，允许的取值" in message
 
-    def test_exclude_single_string_coerced(self):
-        task = SyncTaskConfig.model_validate(_sync(exclude="*.tmp"))
-        assert task.exclude == ["*.tmp"]
+    def test_non_string_rejected(self):
+        with pytest.raises(ValidationError) as exc_info:
+            TaskConfig.model_validate(make_task(process_order=123))
 
-    def test_exclude_list_kept(self):
-        task = SyncTaskConfig.model_validate(_sync(exclude=["*.tmp", "node_modules/"]))
-        assert task.exclude == ["*.tmp", "node_modules/"]
-
-    def test_exclude_non_string_item_rejected(self):
-        message = _format(SyncTaskConfig, _sync(exclude=["a", 123]))
-        assert "exclude" in message
-
-    def test_exclude_from_single_string_coerced(self):
-        task = SyncTaskConfig.model_validate(_sync(exclude_from="rules/exclude.txt"))
-        assert task.exclude_from == ["rules/exclude.txt"]
-
-    def test_exclude_from_list_kept(self):
-        task = SyncTaskConfig.model_validate(_sync(exclude_from=["a.txt", "b.txt"]))
-        assert task.exclude_from == ["a.txt", "b.txt"]
-
-    def test_exclude_from_non_string_item_rejected(self):
-        message = _format(SyncTaskConfig, _sync(exclude_from=["a.txt", 123]))
-        assert "exclude_from" in message
-
-    def test_negative_max_backups_rejected(self):
-        message = _format(SyncTaskConfig, _sync(max_backups=-1))
-        assert "max_backups" in message
-
-    def test_max_retries_rejected(self):
-        """max_retries 属于传输类任务：sync 不消费该字段，配置即按未知字段拒绝。"""
-        message = _format(SyncTaskConfig, _sync(max_retries=3))
-        assert "max_retries" in message
-        assert "不支持的字段" in message
+        assert "process_order: 配置值无效，允许的取值" in format_validation_error(exc_info.value)
 
 
-class TestRuleSetConfig:
-    def test_sizes_parsed(self):
-        rules = RuleSetConfig.model_validate({"lt": {"*.log": "10MiB"}, "ge": {"*.doc": "1MB"}})
+class TestFilterConfig:
+    def test_defaults(self):
+        config = FilterConfig.model_validate({})
 
-        assert rules.lt == {"*.log": 10 * 1024 * 1024}
-        assert rules.ge == {"*.doc": 1000 * 1000}
+        assert config.include_patterns == []
+        assert config.exclude_patterns == []
+        assert config.passthrough_patterns == []
+        assert config.file_mtime == 0
+        assert config.size.min == 0
+        assert config.size.max == 0
 
-    def test_minus_one_sentinel(self):
-        rules = RuleSetConfig.model_validate({"ge": {"*.tmp": -1}})
-        assert rules.ge == {"*.tmp": -1}
-
-    def test_invalid_size_carries_pattern_context(self):
-        """错误消息携带规则键上下文。"""
-        message = _format(RuleSetConfig, {"lt": {"*.tmp": "banana"}})
-        assert "规则 '*.tmp' 的容量值无效" in message
-        assert "容量字符串 'banana' 无法解析" in message
-
-    def test_dir_file_split_views(self):
-        """键尾斜杠 = 目录规则（斜杠剥除）；否则文件规则——拆分在加载期完成。"""
-        rules = RuleSetConfig.model_validate(
-            {"lt": {"docs/": "100MB", "*.log": "1MB"}, "ge": {"cache/": "-1"}}
+    def test_patterns_lowered(self):
+        config = FilterConfig.model_validate(
+            {"include_patterns": ["*.MP4", "Sub/*.MKV"], "exclude_video_codecs": ["HEVC"]}
         )
 
-        assert rules.dir_rules_lt == {"docs": 100 * 1000 * 1000}
-        assert rules.file_rules_lt == {"*.log": 1000 * 1000}
-        assert rules.dir_rules_ge == {"cache": -1}
-        assert rules.file_rules_ge == {}
+        assert config.include_patterns == ["*.mp4", "sub/*.mkv"]
+        assert config.exclude_video_codecs == ["hevc"]
 
-    def test_has_rules(self):
-        assert not RuleSetConfig.model_validate({}).has_rules
-        assert RuleSetConfig.model_validate({"lt": {"a": "1B"}}).has_rules
+    def test_patterns_type_error_translated(self):
+        with pytest.raises(ValidationError) as exc_info:
+            FilterConfig.model_validate({"include_patterns": "not-a-list"})
 
-    def test_unknown_key_rejected(self):
-        """lt/ge 之外的键（如直接把模式写在规则表顶层）拒绝。"""
-        message = _format(RuleSetConfig, {"*.tmp": "-1"})
-        assert "不支持的字段" in message
+        assert "应为数组结构" in format_validation_error(exc_info.value)
 
+    def test_size_range_parsed_to_bytes(self):
+        config = FilterConfig.model_validate({"size": {"min": "100MB", "max": "20GiB"}})
 
-class TestRotateRulesConfig:
-    def test_size_and_count_parsed(self):
-        rules = RotateRulesConfig.model_validate(
-            {"size": {"logs/*": "10MiB"}, "count": {"alpha/*": "10"}}
+        assert config.size.min == 100_000_000
+        assert config.size.max == 20 * 2**30
+
+    def test_size_range_numeric_values_are_bytes(self):
+        config = FilterConfig.model_validate({"size": {"min": 4096}})
+
+        assert config.size.min == 4096
+
+    def test_invalid_size_value_fails_loudly(self):
+        """v1 的静默当 0 缺陷已修复：非法值在加载期得到明确错误。"""
+        with pytest.raises(ValidationError, match="无法解析"):
+            FilterConfig.model_validate({"size": {"min": "abc"}})
+
+    def test_string_range_form_rejected(self):
+        """v1 的 `size = "100MB"` 字符串写法（被静默当 0）现在明确报错。"""
+        with pytest.raises(ValidationError) as exc_info:
+            FilterConfig.model_validate({"size": "100MB"})
+
+        assert "应为字典结构" in format_validation_error(exc_info.value)
+
+    def test_duration_range_parsed_to_seconds(self):
+        config = FilterConfig.model_validate({"duration": {"min": "10s", "max": "2h"}})
+
+        assert config.duration.min == 10.0
+        assert config.duration.max == 7200.0
+
+    def test_invalid_duration_value_fails_loudly(self):
+        with pytest.raises(ValidationError, match="无法解析"):
+            FilterConfig.model_validate({"duration": {"min": "ten seconds"}})
+
+    def test_bitrate_range_parsed_to_bps(self):
+        config = FilterConfig.model_validate(
+            {"video_bitrate": {"min": "500K"}, "audio_bitrate": {"max": "320Kbps"}}
         )
 
-        assert rules.size == {"logs/*": 10 * 1024 * 1024}
-        assert rules.count == {"alpha/*": 10}
+        assert config.video_bitrate.min == 500_000.0
+        assert config.audio_bitrate.max == 320_000.0
 
-    def test_invalid_size_rejected(self):
-        message = _format(RotateRulesConfig, {"size": {"logs/*": "banana"}})
-        assert "容量字符串 'banana' 无法解析" in message
+    def test_framerate_and_short_side(self):
+        config = FilterConfig.model_validate(
+            {"framerate": {"min": 24, "max": "60"}, "short_side": {"min": "720"}}
+        )
 
-    def test_invalid_count_rejected(self):
-        message = _format(RotateRulesConfig, {"count": {"alpha/*": "banana"}})
-        assert "alpha/*" in message
-        assert "数值格式无效" in message
+        assert config.framerate.min == 24.0
+        assert config.framerate.max == 60.0
+        assert config.short_side.min == 720
+
+    def test_file_mtime_coerced(self):
+        config = FilterConfig.model_validate({"file_mtime": "300"})
+
+        assert config.file_mtime == 300.0
+
+    def test_filter_embedded_in_task(self):
+        config = TaskConfig.model_validate(
+            make_task(filter={"include_patterns": ["*.mp4"], "file_mtime": 300})
+        )
+
+        assert config.filter.include_patterns == ["*.mp4"]
+        assert config.filter.file_mtime == 300.0

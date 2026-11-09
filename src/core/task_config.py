@@ -1,21 +1,18 @@
 """任务配置模型层：TOML 任务条目 → 类型化任务对象。
 
 所有"仅凭配置文件本身即可判定"的任务级合法性校验收口于此：字段
-存在性、类型与范围、模式级交叉约束（rotate 至少一项限额、sync 必填
-dest 等）。需要外部条件的校验（目录存在、远端可达、依赖任务完成）
-不在本层——前者由 handlers 在运行期检查，后者由 app.runtime 的任务
-循环判定。
+存在性、类型与范围、模式级交叉约束。需要外部条件的校验（目录存在、
+依赖任务完成）不在本层——前者由 handlers 在运行期检查，后者由
+app.runtime 的任务循环判定。
 
 模型设计：
-- 按 mode 判别：``TASK_MODELS`` 维护 mode → 模型类的分派表（解析器
-  按 mode 选模型后手工分派，不用 pydantic discriminated union——
-  为的是 mode 缺失/不支持时能逐字输出钉死的中文错误消息）；
-- ``extra="forbid"``：未知字段（含拼写错误、不适配当前模式的字段）
-  拒绝任务——配置文件驱动的工具里，字段拼错静默失效最难排查；
+- ``extra="forbid"``：未知字段（含拼写错误）拒绝任务——配置文件驱动
+  的工具里，字段拼错静默失效最难排查；
 - ``frozen=True``：模型加载后不可变，处理器只读消费；
-- 数字字段接受数字字符串（lax 强转，与 http_remotes 数值字段的
-  规则一致）；布尔值一律拒绝——pydantic lax 会把 True 强转为 1.0，与
-  既有"排除 bool"守卫不符，由 _reject_bool 显式排除。
+- 数字字段接受数字字符串（lax 强转）；布尔值一律拒绝——pydantic lax
+  会把 True 强转为 1.0，由 _reject_bool 显式排除；
+- 过滤条件的范围值在加载期解析为数值（parsing 模块）：字符串误写、
+  非法单位等在加载期显式报错，而不是运行期被静默当作 0。
 
 错误消息约定：测试钉死的文案由 validator 抛中文 ValueError 原样
 透出（经 format_validation_error 的 value_error 分支剥前缀）；其余
@@ -29,31 +26,19 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
-    PrivateAttr,
     StringConstraints,
-    field_validator,
     model_validator,
 )
 
-from src.core.patterns import InvalidSizeError, parse_size_string
-
-
-def _parse_size_value(value: object) -> int:
-    """容量配置值 → 字节数（复用 parse_size_string 的完整语义）。
-
-    经 str() 归一后交给 parse_size_string：空值视为 0（不限制）、"-1"
-    为"匹配所有大小"哨兵、其余无法解析的值抛 InvalidSizeError（
-    ValueError 子类）——静默降级为 0 会让规则被静默禁用，必须显式失败。
-    """
-    return parse_size_string(str(value))
-
-
-SizeValue = Annotated[int, BeforeValidator(_parse_size_value)]
-
-
-def _lower_str(value: object) -> object:
-    """字符串统一转小写（取值大小写不敏感的既有行为），其余原样放行。"""
-    return value.lower() if isinstance(value, str) else value
+from src.core.media.ffmpeg.command import TemplateFormatError, render_output_filename
+from src.core.media.parsing import (
+    InvalidBitrateError,
+    InvalidDurationError,
+    InvalidSizeError,
+    parse_bitrate_string,
+    parse_duration_string,
+    parse_size_string,
+)
 
 
 def _reject_bool(value: object) -> object:
@@ -66,226 +51,213 @@ def _reject_bool(value: object) -> object:
     return value
 
 
-class RuleSetConfig(BaseModel):
-    """include/exclude/delete 规则表：lt / ge 两张"模式 → 字节阈值"映射。
-
-    键以 / 结尾表示目录规则（匹配目录名，斜杠剥除）。目录/文件两张
-    匹配视图的拆分在加载期由 model_validator 产出，运行期匹配零解析。
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    lt: dict[str, int] = Field(default_factory=dict)
-    ge: dict[str, int] = Field(default_factory=dict)
-
-    _dir_lt: dict[str, int] = PrivateAttr(default_factory=dict)
-    _dir_ge: dict[str, int] = PrivateAttr(default_factory=dict)
-    _file_lt: dict[str, int] = PrivateAttr(default_factory=dict)
-    _file_ge: dict[str, int] = PrivateAttr(default_factory=dict)
-
-    @field_validator("lt", "ge", mode="before")
-    @classmethod
-    def _parse_thresholds(cls, value: object) -> object:
-        """逐规则解析容量值；失败时携带规则键上下文（既有错误文案）。"""
-        if not isinstance(value, dict):
-            return value  # 非字典交由字段类型校验报错
-        parsed: dict[str, int] = {}
-        for pattern, size_value in value.items():
-            try:
-                parsed[pattern] = parse_size_string(str(size_value))
-            except InvalidSizeError as e:
-                raise ValueError(f"规则 '{pattern}' 的容量值无效：{e}") from e
-        return parsed
-
-    @model_validator(mode="after")
-    def _split_dir_file(self) -> Self:
-        """按键尾部斜杠拆分目录/文件两张匹配视图（加载期一次完成）。"""
-        for source, dir_view, file_view in (
-            (self.lt, self._dir_lt, self._file_lt),
-            (self.ge, self._dir_ge, self._file_ge),
-        ):
-            for pattern, threshold in source.items():
-                if pattern.endswith("/"):
-                    dir_view[pattern[:-1]] = threshold
-                else:
-                    file_view[pattern] = threshold
-        return self
-
-    @property
-    def dir_rules_lt(self) -> dict[str, int]:
-        return self._dir_lt
-
-    @property
-    def dir_rules_ge(self) -> dict[str, int]:
-        return self._dir_ge
-
-    @property
-    def file_rules_lt(self) -> dict[str, int]:
-        return self._file_lt
-
-    @property
-    def file_rules_ge(self) -> dict[str, int]:
-        return self._file_ge
-
-    @property
-    def has_rules(self) -> bool:
-        return bool(self._dir_lt or self._dir_ge or self._file_lt or self._file_ge)
+# ---- 过滤条件的范围值类型（加载期解析为数值） ------------------------------
 
 
-class RotateRulesConfig(BaseModel):
-    """rotate_rules：细粒度轮转规则（size 容量表 + count 数量表）。"""
+def _parse_size_value(value: object) -> int:
+    try:
+        return parse_size_string(value)
+    except InvalidSizeError as e:
+        raise ValueError(str(e)) from e
+
+
+def _parse_duration_value(value: object) -> float:
+    try:
+        return parse_duration_string(value)
+    except InvalidDurationError as e:
+        raise ValueError(str(e)) from e
+
+
+def _parse_bitrate_value(value: object) -> float:
+    try:
+        return parse_bitrate_string(value)
+    except InvalidBitrateError as e:
+        raise ValueError(str(e)) from e
+
+
+SizeValue = Annotated[int, BeforeValidator(_parse_size_value)]
+DurationValue = Annotated[float, BeforeValidator(_parse_duration_value)]
+BitrateValue = Annotated[float, BeforeValidator(_parse_bitrate_value)]
+SecondsValue = Annotated[float, BeforeValidator(_reject_bool)]
+CountValue = Annotated[int, BeforeValidator(_reject_bool)]
+
+
+class _Range(BaseModel):
+    """范围条件的公共形状：min / max，0（或缺省）表示不限制。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    size: dict[str, SizeValue] = Field(default_factory=dict)
-    count: dict[str, int] = Field(default_factory=dict)
+
+class SizeRange(_Range):
+    """size = { min = "100MB", max = "20GB" }（字节）。"""
+
+    min: SizeValue = 0
+    max: SizeValue = 0
 
 
-def _coerce_exclude(value: object) -> object:
-    """exclude / exclude_from 单字符串容错为单元素列表（既有语义），其余原样放行。"""
-    if isinstance(value, str):
-        return [value]
+class DurationRange(_Range):
+    """duration = { min = "10s", max = "2h" }（秒）。"""
+
+    min: DurationValue = 0.0
+    max: DurationValue = 0.0
+
+
+class BitrateRange(_Range):
+    """video_bitrate / audio_bitrate / total_bitrate（bps，十进制词头）。"""
+
+    min: BitrateValue = 0.0
+    max: BitrateValue = 0.0
+
+
+class FramerateRange(_Range):
+    """framerate = { min = 24, max = 60 }（fps）。"""
+
+    min: Annotated[float, BeforeValidator(_reject_bool)] = 0.0
+    max: Annotated[float, BeforeValidator(_reject_bool)] = 0.0
+
+
+class ShortSideRange(_Range):
+    """short_side = { min = 720, max = 1080 }（短边像素数）。"""
+
+    min: CountValue = Field(default=0, ge=0)
+    max: CountValue = Field(default=0, ge=0)
+
+
+def _lower_list(value: object) -> object:
+    """字符串列表统一转小写（匹配大小写不敏感的既有行为），其余原样放行。"""
+    if isinstance(value, list):
+        return [item.lower() if isinstance(item, str) else item for item in value]
     return value
 
 
-class TaskBase(BaseModel):
-    """各模式任务的公共字段（mode 由子类以 Literal 收窄并参与分派）。"""
+class FilterConfig(BaseModel):
+    """[tasks.filter] 配置块：文件名流水线 + 媒体属性条件。
+
+    文件名 patterns 在加载期统一小写（与运行期对 rel_path 的归一
+    配对，实现大小写不敏感匹配）；编码排除列表同理。
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # id 的"非法降级为无 id"语义在解析器（task_plan）处理：降级不是
-    # 校验失败，模型只接收归一后的干净值（非法值被写回为 None）
-    id: str | None = None
-    name: str | None = None
-    # 前置任务 id 列表：单字符串 → 单元素元组的归一与跨任务引用校验在
-    # 解析器完成，模型只声明归一后的字段形态
-    depends_on: tuple[str, ...] = ()
-    source: Annotated[str, StringConstraints(min_length=1)]
-    # dest 允许为空：move/copy/rotate 省略目标时任务合法但不传输，
-    # 逐文件动作由 ActionExecutor 的守卫跳过；sync 覆写为必填
-    dest: str = ""
-    source_quiet_seconds: Annotated[float, BeforeValidator(_reject_bool)] = Field(default=0, ge=0)
-
-
-class TransferTaskConfig(TaskBase):
-    """逐文件传输类任务（move/copy/rotate）的公共字段。"""
-
-    # mode 在 TaskBase 层不声明（由各模式子类以 Literal 收窄并参与分派）；
-    # 传输类装配层需以 str 读取 mode（失败历史的任务身份），此处补基线
-    # 声明，子类仍以 Literal 覆写收窄，校验行为不变
-    mode: str
-    conflict_policy: Annotated[
-        Literal["skip", "overwrite", "copy"], BeforeValidator(_lower_str)
-    ] = "skip"
-    # 缺省不清理：清空目录属删除类副作用，显式开启才启用
-    remove_empty_dirs: bool = False
-    # 单文件操作失败的最大重试次数：连续失败达到次数后，该文件在本任务
-    # 身份下进入失败历史隔离，后续轮次跳过（成功一次即清零）。失败历史
-    # 按 (mode, source, dest) 任务身份隔离计数，阈值随任务级配置逐任务
-    # 判定。sync 整树交给外部工具，不消费此字段——挂在 TransferTaskConfig
-    # 而非 TaskBase，extra=forbid 使 sync 任务配置它时在加载期被拒绝
-    max_retries: Annotated[int, BeforeValidator(_reject_bool)] = Field(default=3, ge=0)
-
-
-class MoveCopyTaskConfig(TransferTaskConfig):
-    """move / copy 模式任务配置。"""
-
-    mode: Literal["move", "copy"]
-    # 0 的既有语义即"无时间限制"，缺省复用该语义
-    mtime_threshold_seconds: Annotated[float, BeforeValidator(_reject_bool)] = Field(
-        default=0, ge=0
-    )
-    include_rules: RuleSetConfig = Field(default_factory=RuleSetConfig)
-    exclude_rules: RuleSetConfig = Field(default_factory=RuleSetConfig)
-    delete_rules: RuleSetConfig = Field(default_factory=RuleSetConfig)
-
-
-class RotateTaskConfig(TransferTaskConfig):
-    """rotate 模式任务配置（限额在加载期解析为字节数 / 数量）。
-
-    include 不参与 rotate：模型不声明 include_rules 字段，extra=forbid
-    使"rotate 模式配置 include_rules"在加载期被拒绝（既有约束）。
-    """
-
-    mode: Literal["rotate"]
-    exclude_rules: RuleSetConfig = Field(default_factory=RuleSetConfig)
-    delete_rules: RuleSetConfig = Field(default_factory=RuleSetConfig)
-    size_limit: SizeValue = 0
-    count_limit: int = Field(default=0, ge=0)
-    rotate_rules: RotateRulesConfig = Field(default_factory=RotateRulesConfig)
-
-    @field_validator("count_limit", mode="before")
-    @classmethod
-    def _parse_count_limit(cls, value: object) -> object:
-        """数量配置值强转；消息钉死既有文案（字段名由 loc 前缀再述一次）。
-
-        布尔与不可强转的值一律报错；浮点沿用 int() 的截断语义。
-        """
-        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-            # 同 _reject_bool：validator 内必须抛 ValueError 才能进入
-            # ValidationError 通道，类型类错误不适用 TRY004 的建议
-            raise ValueError(f"count_limit 的数量配置值 {value!r} 无效（应为整数）")  # noqa: TRY004
-        try:
-            return int(value)
-        except ValueError as e:
-            raise ValueError(f"count_limit 的数量配置值 {value!r} 无效（应为整数）") from e
-
-    @model_validator(mode="after")
-    def _require_any_limit(self) -> Self:
-        """四类限额至少配置一项（消息逐字钉死）。"""
-        if (
-            self.size_limit == 0
-            and self.count_limit == 0
-            and not self.rotate_rules.size
-            and not self.rotate_rules.count
-        ):
-            raise ValueError(
-                "rotate 模式下必须配置 size_limit、count_limit、"
-                "rotate_rules.size 或 rotate_rules.count 中的至少一项"
-            )
-        return self
-
-
-class SyncTaskConfig(TaskBase):
-    """sync 模式任务配置（整树同步，由外部工具执行）。"""
-
-    mode: Literal["sync"]
-    # 覆写基类默认值：sync 没有目标目录即无意义，dest 必填
-    dest: str
-    tool: str = "auto"
-    exclude: Annotated[list[str], BeforeValidator(_coerce_exclude)] = Field(default_factory=list)
-    # 排除规则文件路径列表（透传给工具的 --exclude-from）：只传路径不做内容解析，
-    # 文件内注释行/模式语法由底层工具处理；文件存在性是外部条件，
-    # 由 handler 在运行期校验，不在加载期判定
-    exclude_from: Annotated[list[str], BeforeValidator(_coerce_exclude)] = Field(
+    include_patterns: Annotated[list[str], BeforeValidator(_lower_list)] = Field(
         default_factory=list
     )
-    # 备份目录：同步中被替换/删除的文件由底层工具移入 [backup_dir]/[时间戳] 目录。
-    # 空（默认）表示不创建备份；该目录视为备份独占目录，max_backups 轮转
-    # 会按子目录名排序删除其中的旧子目录，请勿混放非备份数据。
-    # dest 为 SSH 远端时是同主机上的远端 POSIX 绝对路径。
-    # "不得位于 source/dest 之下"属跨字段语义校验，由 task_plan 经
-    # dest.validate_backup_dir 在加载期判定（需要 source/dest 的路径语义）。
+    exclude_patterns: Annotated[list[str], BeforeValidator(_lower_list)] = Field(
+        default_factory=list
+    )
+    passthrough_patterns: Annotated[list[str], BeforeValidator(_lower_list)] = Field(
+        default_factory=list
+    )
+    # 修改时间冷却（秒）：文件需早于该阈值才进入处理，0 表示不筛选
+    file_mtime: SecondsValue = Field(default=0, ge=0)
+    size: SizeRange = Field(default_factory=SizeRange)
+    duration: DurationRange = Field(default_factory=DurationRange)
+    video_bitrate: BitrateRange = Field(default_factory=BitrateRange)
+    audio_bitrate: BitrateRange = Field(default_factory=BitrateRange)
+    total_bitrate: BitrateRange = Field(default_factory=BitrateRange)
+    framerate: FramerateRange = Field(default_factory=FramerateRange)
+    short_side: ShortSideRange = Field(default_factory=ShortSideRange)
+    exclude_video_codecs: Annotated[list[str], BeforeValidator(_lower_list)] = Field(
+        default_factory=list
+    )
+    exclude_audio_codecs: Annotated[list[str], BeforeValidator(_lower_list)] = Field(
+        default_factory=list
+    )
+
+
+# ---- 任务级枚举字段 ----------------------------------------------------------
+
+
+def _lower_str(value: object) -> object:
+    """枚举型字符串字段统一收小写（与过滤 patterns 的大小写不敏感惯例
+    一致）；非字符串原样放行，交由类型约束报错。"""
+    if isinstance(value, str):
+        return value.lower()
+    return value
+
+
+# 处理顺序：待处理文件清单确定后的逐文件处理次序（运行期消费方为
+# FFmpegTaskHandler；default 保持扫描顺序不变）
+ProcessOrder = Literal[
+    "default",
+    "alphabetic",
+    "largest_first",
+    "smallest_first",
+    "newest_first",
+    "oldest_first",
+]
+
+
+# ---- 任务模型 ---------------------------------------------------------------
+
+
+class TaskConfig(BaseModel):
+    """[[tasks]] 任务条目配置模型：监听源目录，用 FFmpeg 处理后按配置善后。
+
+    id 的"非法降级为无 id"、depends_on 的"单字符串 → 单元素元组"归一
+    与跨任务引用校验都在解析器（task_plan）完成——降级/归一不是校验
+    失败，模型只接收归一后的干净值。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str | None = None
+    name: str | None = None
+    depends_on: tuple[str, ...] = ()
+    source_dir: Annotated[str, StringConstraints(min_length=1)]
+    # 没有目标目录的任务无意义，dest_dir 必填
+    dest_dir: Annotated[str, StringConstraints(min_length=1)]
+    filter: FilterConfig = Field(default_factory=FilterConfig)
+
+    # 待处理文件清单确定后的处理顺序；default 保持扫描顺序（os.walk 确定性遍历）
+    process_order: Annotated[ProcessOrder, BeforeValidator(_lower_str)] = "default"
+
+    # FFmpeg 参数模板（{input}/{output} 占位符；ffmpeg 可执行文件与预置参数
+    # 由程序注入），多行书写合法
+    ffmpeg_cmd: Annotated[str, StringConstraints(min_length=1)]
+    # 输出文件名模板（{basename} = 源文件名不含扩展名），主/备命令共用；
+    # {output} 的值即本模板的渲染结果拼 dest 子目录而成
+    output_filename: Annotated[str, StringConstraints(min_length=1)]
+    # 主命令连续失败 fallback_count 次后启用的备用参数模板
+    ffmpeg_cmd_fallback: str = ""
+    fallback_count: CountValue = Field(default=0, ge=0)
+    # 单个文件失败次数上限：达到后永久跳过（成功一次即清零）；
+    # 0 表示永不因失败跳过，失败文件每轮重试
+    failure_count: CountValue = Field(default=3, ge=0)
+    # FFmpeg 单文件处理超时（秒），0 表示不限
+    ffmpeg_timeout: SecondsValue = Field(default=0, ge=0)
+    # 稳定性检查等待秒数：等待后复查文件大小是否仍在变化，0 表示不检查
+    stable_duration: SecondsValue = Field(default=0, ge=0)
+    # 成功后是否删除源文件；source_expired_minutes > 0 时延迟删除
+    remove_source: bool = False
+    source_expired_minutes: SecondsValue = Field(default=0, ge=0)
+    # 成功后源文件的归档目录（保持子目录结构）；remove_source 为 true 时忽略
     backup_dir: str = ""
-    max_backups: int = Field(default=0, ge=0)
+    # 失败隔离目录（保持子目录结构）：文件失败次数达到 failure_count 上限后
+    # 移入该目录；空字符串表示不启用（失败文件永久留在源目录不再处理）
+    failure_dir: str = ""
 
-    @field_validator("tool")
-    @classmethod
-    def _validate_tool(cls, value: str) -> str:
-        """取值校验（消息逐字钉死）；大小写不敏感，归一为小写。"""
-        lowered = value.lower()
-        if lowered not in ("auto", "rsync", "rclone"):
-            raise ValueError(f"sync 模式的 tool 配置值无效: '{value}'，可选值: auto、rsync、rclone")
-        return lowered
+    @model_validator(mode="after")
+    def _check_fallback_config(self) -> Self:
+        """配置了 fallback_count 但没有备用命令：切换条件永不满足，属配置错误。"""
+        if self.fallback_count > 0 and not self.ffmpeg_cmd_fallback:
+            raise ValueError("配置了 fallback_count 时必须同时配置 ffmpeg_cmd_fallback")
+        return self
 
+    @model_validator(mode="after")
+    def _check_output_filename(self) -> Self:
+        """output_filename 模板校验：占位符支持项与渲染结果的形状。
 
-TaskConfig = MoveCopyTaskConfig | RotateTaskConfig | SyncTaskConfig
-
-# mode → 配置模型的分派表（解析器使用；与 registry 的 mode → 处理器
-# 映射由同一组模式名驱动，不一致属编程错误，registry 有防御分支兜底）
-TASK_MODELS: dict[str, type[TaskConfig]] = {
-    "move": MoveCopyTaskConfig,
-    "copy": MoveCopyTaskConfig,
-    "rotate": RotateTaskConfig,
-    "sync": SyncTaskConfig,
-}
+        用哑 basename 试渲染即可钉死全部模板错误（渲染结果只取决于模板
+        形状，与真实文件名无关）；渲染结果必须是纯文件名——不允许路径
+        分隔符与 . / ..，保证输出永远落在 dest_dir 的子树内。
+        """
+        try:
+            rendered = render_output_filename(self.output_filename, "probe")
+        except TemplateFormatError as e:
+            raise ValueError(str(e)) from e
+        if "/" in rendered or "\\" in rendered or rendered in (".", ".."):
+            raise ValueError(
+                f"output_filename 渲染结果 {rendered!r} 不是纯文件名（不允许路径分隔符与 . / ..）"
+            )
+        return self

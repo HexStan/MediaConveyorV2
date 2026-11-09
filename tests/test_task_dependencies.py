@@ -7,10 +7,11 @@
 为什么驱动 run_tasks 而非 run_task：依赖是"任务间"的编排行为，单个
 handler 的 execute() 入口观察不到；run_tasks 同步执行（无停止指令时
 不睡眠），可直接在测试线程驱动，任务结果断言落在目录树快照上。
+编排任务统一配置 passthrough_patterns = ["*"]：任务"被执行"的终态 =
+文件直传进目标目录，无需真实 FFmpeg。
 """
 
 import os
-import time
 
 import pytest
 
@@ -18,7 +19,7 @@ from src.app import runtime
 from src.app.config import GlobalConfig
 from src.app.context import AppContext
 from src.core.task_plan import resolve_tasks
-from tests.helpers import OLD, make_tree, snapshot
+from tests.helpers import make_tree, snapshot
 
 # ============================================================
 # 白盒：resolve_tasks 加载期校验
@@ -26,20 +27,19 @@ from tests.helpers import OLD, make_tree, snapshot
 
 
 def _task(**extra):
-    """最小合法任务字典（解析期不做 I/O，source/dest 路径无需存在）。"""
+    """最小合法任务字典（解析期不做 I/O，source_dir/dest_dir 路径无需存在）。"""
     task = {
-        "mode": "move",
-        "source": "s",
-        "dest": "d",
-        "mtime_threshold_seconds": 0,
-        "remove_empty_dirs": False,
+        "source_dir": "s",
+        "dest_dir": "d",
+        "ffmpeg_cmd": "-i {input} {output}",
+        "output_filename": "{basename}.mp4",
     }
     task.update(extra)
     return task
 
 
 def _plan(tasks, capture_log):
-    return resolve_tasks(tasks, logger=capture_log, http_aliases=(), ssh_aliases=())
+    return resolve_tasks(tasks, logger=capture_log)
 
 
 class TestIdNormalization:
@@ -164,18 +164,121 @@ class TestReferenceValidation:
         assert not specs[1].blocked
 
 
+class TestPathValidation:
+    """FFmpeg 任务新增的目录位置关系校验（加载期收口）。"""
+
+    def test_dest_inside_source_rejected(self, capture_log):
+        specs = _plan([_task(source_dir="s", dest_dir="s/out")], capture_log)
+        assert specs[0].blocked
+        assert capture_log.has("error", "不得相同或存在嵌套关系")
+
+    def test_source_inside_dest_rejected(self, capture_log, tmp_path):
+        specs = _plan(
+            [_task(source_dir=str(tmp_path / "dest" / "src"), dest_dir=str(tmp_path / "dest"))],
+            capture_log,
+        )
+        assert specs[0].blocked
+
+    def test_backup_dir_inside_source_rejected(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    backup_dir=str(tmp_path / "src" / "bak"),
+                )
+            ],
+            capture_log,
+        )
+        assert specs[0].blocked
+        assert capture_log.has("error", "backup_dir")
+
+    def test_remove_source_with_backup_warns_but_keeps_task(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    backup_dir=str(tmp_path / "bak"),
+                    remove_source=True,
+                )
+            ],
+            capture_log,
+        )
+        assert not specs[0].blocked
+        assert capture_log.has("warning", "backup_dir 将被忽略")
+
+    def test_failure_dir_inside_source_rejected(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    failure_dir=str(tmp_path / "src" / "failed"),
+                )
+            ],
+            capture_log,
+        )
+        assert specs[0].blocked
+        assert capture_log.has("error", "failure_dir")
+
+    def test_failure_dir_inside_dest_rejected(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    failure_dir=str(tmp_path / "dest" / "failed"),
+                )
+            ],
+            capture_log,
+        )
+        assert specs[0].blocked
+        assert capture_log.has("error", "failure_dir")
+
+    def test_failure_dir_equal_to_backup_dir_rejected(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    backup_dir=str(tmp_path / "vault"),
+                    failure_dir=str(tmp_path / "vault"),
+                )
+            ],
+            capture_log,
+        )
+        assert specs[0].blocked
+        assert capture_log.has("error", "failure_dir 与 backup_dir 不得相同")
+
+    def test_failure_dir_without_failure_count_warns_but_keeps_task(self, capture_log, tmp_path):
+        specs = _plan(
+            [
+                _task(
+                    source_dir=str(tmp_path / "src"),
+                    dest_dir=str(tmp_path / "dest"),
+                    failure_dir=str(tmp_path / "failed"),
+                    failure_count=0,
+                )
+            ],
+            capture_log,
+        )
+        assert not specs[0].blocked
+        assert capture_log.has("warning", "failure_dir 将不会被使用")
+
+
 # ============================================================
 # 灰盒：run_tasks 编排（目录树快照 + 日志断言）
 # ============================================================
 
 
-def _move_task(src, dest, **extra):
+def _passthrough_task(src, dest, **extra):
     task = {
-        "mode": "move",
-        "source": str(src),
-        "dest": str(dest),
-        "mtime_threshold_seconds": 0,
-        "remove_empty_dirs": False,
+        "source_dir": str(src),
+        "dest_dir": str(dest),
+        "ffmpeg_cmd": "-i {input} {output}",
+        "output_filename": "{basename}.mp4",
+        "filter": {"passthrough_patterns": ["*"]},
     }
     task.update(extra)
     os.makedirs(dest, exist_ok=True)
@@ -183,7 +286,7 @@ def _move_task(src, dest, **extra):
 
 
 @pytest.fixture
-def run_round(app_context):
+def run_round(app_context, stub_ffmpeg):
     """驱动一轮 run_tasks：注入任务列表并同步执行（无停止指令）。
 
     与生产加载路径一致：任务字典先经 resolve_tasks 产出 TaskSpec
@@ -192,8 +295,8 @@ def run_round(app_context):
 
     def _run(tasks):
         ctx = AppContext.get()
-        specs = resolve_tasks(tasks, logger=ctx.logger, http_aliases=(), ssh_aliases=())
-        ctx.update_config(GlobalConfig(), specs, {}, {})
+        specs = resolve_tasks(tasks, logger=ctx.logger)
+        ctx.update_config(GlobalConfig(), specs)
         runtime.run_tasks()
         return ctx
 
@@ -202,110 +305,122 @@ def run_round(app_context):
 
 class TestRunTasksOrchestration:
     def test_completed_dependency_runs_dependent(self, tmp_path, run_round):
-        first = _move_task(tmp_path / "src-a", tmp_path / "dest-a", id="a")
-        second = _move_task(tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"])
-        make_tree(first["source"], {"a.txt": b"alpha"})
-        make_tree(second["source"], {"b.txt": b"beta"})
+        first = _passthrough_task(tmp_path / "src-a", tmp_path / "dest-a", id="a")
+        second = _passthrough_task(
+            tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"]
+        )
+        make_tree(first["source_dir"], {"a.txt": b"alpha"})
+        make_tree(second["source_dir"], {"b.txt": b"beta"})
 
         run_round([first, second])
 
-        assert snapshot(first["dest"]) == {"a.txt": 5}
-        assert snapshot(second["dest"]) == {"b.txt": 4}
+        assert snapshot(first["dest_dir"]) == {"a.txt": 5}
+        assert snapshot(second["dest_dir"]) == {"b.txt": 4}
 
-    def test_failed_dependency_skips_dependent(self, tmp_path, run_round, capture_log):
-        # 前置任务源目录不存在 → FAILED
-        first = _move_task(tmp_path / "missing-src", tmp_path / "dest-a", id="a")
-        second = _move_task(tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"])
-        make_tree(second["source"], {"b.txt": b"beta"})
+    def test_failed_dependency_skips_dependent(self, tmp_path, run_round, stub_ffmpeg, capture_log):
+        # 前置任务命令模板错误 → 本轮 FAILED（直传任务不经过命令模板，
+        # 故前置任务须为真实 FFmpeg 任务才能观察 FAILED）
+        first = {
+            "source_dir": str(tmp_path / "src-a"),
+            "dest_dir": str(tmp_path / "dest-a"),
+            "ffmpeg_cmd": "{oops}",
+            "output_filename": "{basename}.mp4",
+            "id": "a",
+        }
+        second = _passthrough_task(
+            tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"]
+        )
+        make_tree(first["source_dir"], {"a.txt": b"alpha"})
+        make_tree(second["source_dir"], {"b.txt": b"beta"})
 
         run_round([first, second])
 
+        assert capture_log.has("error", "命令模板无效")
         assert capture_log.has("error", "前置任务 a 未完成")
-        assert snapshot(second["source"]) == {"b.txt": 4}
-        assert snapshot(second["dest"]) == {}
+        assert snapshot(second["source_dir"]) == {"b.txt": 4}
+        assert snapshot(second["dest_dir"]) == {}
 
     def test_skipped_dependency_cascades(self, tmp_path, run_round, capture_log):
-        # 前置任务缺 mode → 装配失败 SKIPPED；依赖链逐级跳过
-        first = _move_task(tmp_path / "src-a", tmp_path / "dest-a", id="a")
-        del first["mode"]
-        second = _move_task(tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"])
-        third = _move_task(tmp_path / "src-c", tmp_path / "dest-c", id="c", depends_on=["b"])
+        # 前置任务缺必填字段 → 装配失败 SKIPPED；依赖链逐级跳过
+        first = _passthrough_task(tmp_path / "src-a", tmp_path / "dest-a", id="a")
+        del first["source_dir"]
+        second = _passthrough_task(
+            tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"]
+        )
+        third = _passthrough_task(tmp_path / "src-c", tmp_path / "dest-c", id="c", depends_on=["b"])
         for task, name in ((second, "b.txt"), (third, "c.txt")):
-            make_tree(task["source"], {name: name.encode()})
+            make_tree(task["source_dir"], {name: name.encode()})
 
         run_round([first, second, third])
 
         assert capture_log.has("error", "前置任务 a 未完成")
         assert capture_log.has("error", "前置任务 b 未完成")
-        assert snapshot(second["source"]) == {"b.txt": 5}
-        assert snapshot(third["source"]) == {"c.txt": 5}
-
-    def test_quiet_period_skip_still_satisfies_dependency(self, tmp_path, run_round, capture_log):
-        # 静默期跳过 = 本轮无事可做，记 COMPLETED，依赖方照常执行
-        now = time.time()
-        first = _move_task(tmp_path / "src-a", tmp_path / "dest-a", id="a")
-        first["source_quiet_seconds"] = 300
-        second = _move_task(tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"])
-        make_tree(first["source"], {"a.txt": b"alpha"}, default_mtime=now)
-        make_tree(second["source"], {"b.txt": b"beta"}, default_mtime=OLD)
-
-        run_round([first, second])
-
-        assert capture_log.has("info", "源目录最近修改于"), "前置任务应因静默期被跳过"
-        assert snapshot(second["dest"]) == {"b.txt": 4}
+        assert snapshot(second["source_dir"]) == {"b.txt": 5}
+        assert snapshot(third["source_dir"]) == {"c.txt": 5}
 
     def test_dependency_on_later_task_blocks_self_only(self, tmp_path, run_round, capture_log):
-        first = _move_task(tmp_path / "src-a", tmp_path / "dest-a", id="a", depends_on=["late"])
-        second = _move_task(tmp_path / "src-b", tmp_path / "dest-b", id="late")
-        make_tree(first["source"], {"a.txt": b"alpha"})
-        make_tree(second["source"], {"b.txt": b"beta"})
+        first = _passthrough_task(
+            tmp_path / "src-a", tmp_path / "dest-a", id="a", depends_on=["late"]
+        )
+        second = _passthrough_task(tmp_path / "src-b", tmp_path / "dest-b", id="late")
+        make_tree(first["source_dir"], {"a.txt": b"alpha"})
+        make_tree(second["source_dir"], {"b.txt": b"beta"})
 
         run_round([first, second])
 
         assert capture_log.has("error", "位于其后方的任务 'late'")
-        assert snapshot(first["source"]) == {"a.txt": 5}
-        assert snapshot(second["dest"]) == {"b.txt": 4}
+        assert snapshot(first["source_dir"]) == {"a.txt": 5}
+        assert snapshot(second["dest_dir"]) == {"b.txt": 4}
 
     def test_duplicate_id_skipped_and_dependency_resolves_to_first(
         self, tmp_path, run_round, capture_log
     ):
-        first = _move_task(tmp_path / "src-a", tmp_path / "dest-a", id="dup")
-        duplicate = _move_task(tmp_path / "src-dup", tmp_path / "dest-dup", id="dup")
-        third = _move_task(tmp_path / "src-c", tmp_path / "dest-c", depends_on=["dup"])
-        make_tree(first["source"], {"a.txt": b"alpha"})
-        make_tree(duplicate["source"], {"dup.txt": b"dup"})
-        make_tree(third["source"], {"c.txt": b"charlie"})
+        first = _passthrough_task(tmp_path / "src-a", tmp_path / "dest-a", id="dup")
+        duplicate = _passthrough_task(tmp_path / "src-dup", tmp_path / "dest-dup", id="dup")
+        third = _passthrough_task(tmp_path / "src-c", tmp_path / "dest-c", depends_on=["dup"])
+        make_tree(first["source_dir"], {"a.txt": b"alpha"})
+        make_tree(duplicate["source_dir"], {"dup.txt": b"dup"})
+        make_tree(third["source_dir"], {"c.txt": b"charlie"})
 
         run_round([first, duplicate, third])
 
         assert capture_log.has("error", "与任务 #1 重复")
-        assert snapshot(duplicate["source"]) == {"dup.txt": 3}, "重复 id 的任务应被跳过"
-        assert snapshot(first["dest"]) == {"a.txt": 5}
-        assert snapshot(third["dest"]) == {"c.txt": 7}, "依赖应解析到首个出现者"
+        assert snapshot(duplicate["source_dir"]) == {"dup.txt": 3}, "重复 id 的任务应被跳过"
+        assert snapshot(first["dest_dir"]) == {"a.txt": 5}
+        assert snapshot(third["dest_dir"]) == {"c.txt": 7}, "依赖应解析到首个出现者"
 
     def test_invalid_id_task_runs_but_cannot_be_depended(self, tmp_path, run_round, capture_log):
-        first = _move_task(tmp_path / "src-a", tmp_path / "dest-a", id="a!")
-        second = _move_task(tmp_path / "src-b", tmp_path / "dest-b", depends_on=["a!"])
-        make_tree(first["source"], {"a.txt": b"alpha"})
-        make_tree(second["source"], {"b.txt": b"beta"})
+        first = _passthrough_task(tmp_path / "src-a", tmp_path / "dest-a", id="a!")
+        second = _passthrough_task(tmp_path / "src-b", tmp_path / "dest-b", depends_on=["a!"])
+        make_tree(first["source_dir"], {"a.txt": b"alpha"})
+        make_tree(second["source_dir"], {"b.txt": b"beta"})
 
         run_round([first, second])
 
         assert capture_log.has("warning", "含非法字符")
         assert capture_log.has("error", "依赖的 id 'a!' 不存在")
-        assert snapshot(first["dest"]) == {"a.txt": 5}, "非法 id 的任务照常执行"
-        assert snapshot(second["source"]) == {"b.txt": 4}
+        assert snapshot(first["dest_dir"]) == {"a.txt": 5}, "非法 id 的任务照常执行"
+        assert snapshot(second["source_dir"]) == {"b.txt": 4}
 
     def test_independent_task_unaffected_by_unmet_dependency(
-        self, tmp_path, run_round, capture_log
+        self, tmp_path, run_round, stub_ffmpeg, capture_log
     ):
-        first = _move_task(tmp_path / "missing-src", tmp_path / "dest-a", id="a")
-        second = _move_task(tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"])
-        third = _move_task(tmp_path / "src-c", tmp_path / "dest-c")
-        make_tree(second["source"], {"b.txt": b"beta"})
-        make_tree(third["source"], {"c.txt": b"charlie"})
+        first = {
+            "source_dir": str(tmp_path / "src-a"),
+            "dest_dir": str(tmp_path / "dest-a"),
+            "ffmpeg_cmd": "{oops}",
+            "output_filename": "{basename}.mp4",
+            "id": "a",
+        }
+        second = _passthrough_task(
+            tmp_path / "src-b", tmp_path / "dest-b", id="b", depends_on=["a"]
+        )
+        third = _passthrough_task(tmp_path / "src-c", tmp_path / "dest-c")
+        make_tree(first["source_dir"], {"a.txt": b"alpha"})
+        make_tree(second["source_dir"], {"b.txt": b"beta"})
+        make_tree(third["source_dir"], {"c.txt": b"charlie"})
 
         run_round([first, second, third])
 
         assert capture_log.has("error", "前置任务 a 未完成")
-        assert snapshot(third["dest"]) == {"c.txt": 7}, "无依赖任务不受影响"
+        assert snapshot(third["dest_dir"]) == {"c.txt": 7}, "无依赖任务不受影响"

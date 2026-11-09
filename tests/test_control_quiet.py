@@ -27,7 +27,7 @@ from src.app.instance import (
 @pytest.fixture
 def unique_name():
     """全局临时目录里的一次性实例标识，测试结束自动清理运行时文件。"""
-    name = f"smartarchiver-test-{uuid.uuid4().hex}"
+    name = f"mediaconveyor-test-{uuid.uuid4().hex}"
     yield name
     paths = instance_paths(name)
     for path in (paths.lock, paths.pid, paths.ctl, paths.state):
@@ -43,7 +43,7 @@ def control_config(tmp_path, monkeypatch, unique_name):
     """
     config_file = tmp_path / "config.toml"
     config_file.write_text(f'instance_name = "{unique_name}"\n', encoding="utf-8")
-    monkeypatch.setattr(control.paths, "config_path", lambda is_server: str(config_file))
+    monkeypatch.setattr(control.paths, "config_path", lambda: str(config_file))
 
 
 # ============================================================
@@ -60,7 +60,7 @@ def test_wait_instance_started_detects_lock(capture_log, unique_name):
 def test_wait_instance_started_times_out_without_instance(unique_name):
     """无实例持有锁时等待到超时，返回 False。"""
     started = time.monotonic()
-    assert not control._wait_instance_started(unique_name, timeout=0.3)
+    assert not control._wait_instance_started(unique_name, timeout=0.3, poll_interval=0.05)
     assert time.monotonic() - started >= 0.3
 
 
@@ -68,7 +68,7 @@ def test_wait_instance_started_reads_module_timeout_default(unique_name, monkeyp
     """timeout 缺省时每次调用读取模块常量——测试注入缩短等待的接线。"""
     monkeypatch.setattr(control, "_START_CONFIRM_TIMEOUT", 0.2)
     started = time.monotonic()
-    assert not control._wait_instance_started(unique_name)
+    assert not control._wait_instance_started(unique_name, poll_interval=0.05)
     elapsed = time.monotonic() - started
     assert 0.2 <= elapsed < 5.0
 
@@ -86,7 +86,7 @@ def test_cmd_start_quiet_returns_after_lock_confirmed(
     holder: list[SingleInstance] = []
     spawned: list[threading.Thread] = []
 
-    def fake_spawn(is_server: bool) -> int:
+    def fake_spawn() -> int:
         def _acquire_later() -> None:
             time.sleep(0.2)  # 先让 cmd_start 的存活预检与首轮轮询落空
             inst = SingleInstance(unique_name, capture_log)
@@ -101,7 +101,7 @@ def test_cmd_start_quiet_returns_after_lock_confirmed(
     monkeypatch.setattr(control, "_spawn_detached", fake_spawn)
     monkeypatch.setattr(control, "_START_CONFIRM_TIMEOUT", 5.0)
 
-    control.cmd_start(is_server=False, quiet=True)
+    control.cmd_start(quiet=True)
 
     # 等模拟子进程线程收尾，保证锁持有者已登记、可被可靠释放
     for t in spawned:
@@ -120,11 +120,11 @@ def test_cmd_start_quiet_times_out_without_instance(
     monkeypatch, capture_log, unique_name, control_config, capsys
 ):
     """超时未确认（子进程未持锁）按失败退出，错误提示指向 log 子命令。"""
-    monkeypatch.setattr(control, "_spawn_detached", lambda is_server: 4321)
+    monkeypatch.setattr(control, "_spawn_detached", lambda: 4321)
     monkeypatch.setattr(control, "_START_CONFIRM_TIMEOUT", 0.3)
 
     with pytest.raises(SystemExit) as exc_info:
-        control.cmd_start(is_server=False, quiet=True)
+        control.cmd_start(quiet=True)
 
     assert exc_info.value.code == 1
     assert "超时" in capsys.readouterr().err
@@ -147,7 +147,7 @@ def test_cmd_run_once_quiet_returns_on_accept(
 
     with SingleInstance(unique_name, capture_log):
         write_state(unique_name, PHASE_SLEEPING, last_run_once=time.time() + 60)
-        control.cmd_run_once(is_server=False, quiet=True)
+        control.cmd_run_once(quiet=True)
 
     out = capsys.readouterr().out
     assert "指令已受理，实例即将执行一轮任务。" in out
@@ -163,7 +163,7 @@ def test_cmd_run_once_quiet_exits_nonzero_when_ignored(
     with SingleInstance(unique_name, capture_log):
         write_state(unique_name, PHASE_SLEEPING)  # 休眠期但无任何回执
         with pytest.raises(SystemExit) as exc_info:
-            control.cmd_run_once(is_server=False, quiet=True)
+            control.cmd_run_once(quiet=True)
 
     assert exc_info.value.code == 1
     assert "未确认受理" in capsys.readouterr().err
