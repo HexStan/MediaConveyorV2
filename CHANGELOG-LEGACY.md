@@ -4,36 +4,36 @@
 
 ---
 
-## 未发布
+## [8.0.0] - 2026-11-10
 
-### 新增
-
-- 基于 fnmatch 模式的文件过滤流水线（`[tasks.filter]`）：
-    - `include_patterns`：指定要识别的文件，不填或为空则包含所有文件。
-    - `exclude_patterns`：匹配到的文件将被跳过。
-    - `passthrough_patterns`：匹配到的文件不经过 FFmpeg，直接移动到目标目录（仍受 `file_mtime` 约束）。
-    - 三者均以 fnmatch 语法匹配相对于 `source_dir` 的文件路径（不区分大小写，路径分隔符统一为 `/`），按 include → exclude → passthrough 的顺序过滤，支持按目录、路径关键字等更灵活的匹配方式。
-
-### 变更
-
-- 状态存储从 JSON 文件迁移至 SQLite 数据库（`data/` 目录），提升数据一致性与查询效率。
-- 未配置任何文件名过滤条件时，程序默认处理源目录中的所有文件（此前默认仅处理 `.mp4` 文件）。
-
-### 移除
-
-- 配置项 `input_formats` 和 `direct_move_formats` 已移除，由 `include_patterns` 和 `passthrough_patterns` 取代。
+> 该版本可能是 MediaConveyorV1 的最后一个版本。如需继续使用，强烈建议迁移至 [MediaConveyorV2](https://github.com/HexStan/MediaConveyorV2)。
 
 ### 破坏性变更
 
-- 状态文件路径变更：`logs/state.json` → `data/` 目录下的 SQLite 数据库。
-- Docker 用户需在 `docker-compose.yml` 中新增 `./data:/app/data` 卷挂载，以确保数据库文件持久化。
-- 文件过滤配置从扩展名列表（`input_formats`/`direct_move_formats`）改为 fnmatch 模式列表（`include_patterns`/`exclude_patterns`/`passthrough_patterns`）。旧配置项不会自动迁移，需手动转换（见迁移指南）。
+1. 状态存储路径变更：`logs/state.json` → `data/media-conveyor.db`（SQLite 数据库）。
+2. Docker 用户需在 `docker-compose.yml` 中新增 `./data:/app/data` 卷挂载，以确保数据库文件持久化。
+3. 文件过滤配置从扩展名列表（`input_formats`/`direct_move_formats`）改为 fnmatch 模式列表（`include_patterns`/`exclude_patterns`/`passthrough_patterns`）。旧配置项已移除且不会自动迁移，需手动转换（见迁移指南）。
 
-### 迁移指南（v4.x -> 未发布）
+### 新增
+
+1. 基于 fnmatch 模式的文件过滤流水线（`[tasks.filter]`）：
+   1. `include_patterns`：指定要识别的文件，不填或为空则包含所有文件。
+   2. `exclude_patterns`：匹配到的文件将被跳过。
+   3. `passthrough_patterns`：匹配到的文件不经过 FFmpeg，直接移动到目标目录（仍受 `file_mtime` 约束）。
+   
+   三者均以 fnmatch 语法匹配相对于 `source_dir` 的文件路径（不区分大小写，路径分隔符统一为 `/`），按 include → exclude → passthrough 的顺序过滤，支持按目录、路径关键字等更灵活的匹配方式。
+
+### 变更
+
+1. 项目更名为 MediaConveyor（原 VideoWatchdog）：Docker 镜像地址从 `hexstan/video-watchdog`（Docker Hub）变更为 `ghcr.io/hexstan/mediaconveyor`。
+2. 运行环境要求提升为 Python 3.14+，依赖安装方式从 `pip install -r requirements.txt` 改为 `uv sync`（Python 可由 uv 托管，无需单独安装）。
+3. 未配置任何文件名过滤条件时，程序默认处理源目录中的所有文件（此前默认仅处理 `.mp4` 文件）。
+
+### 迁移指南
 
 #### 1. 状态存储迁移
 
-本版本不再提供自动数据迁移。v4.x 及更早版本的 JSON 状态数据（`logs/state.json`）不会迁移至 SQLite，首次启动时视为全新状态，所有文件将被重新扫描，此前的失败计数与处理成功时间记录将丢失。
+本版本不再提供自动数据迁移。v4.x 及更早版本的 JSON 状态数据（`logs/state.json`）不会迁移至 SQLite 数据库（`data/media-conveyor.db`），首次启动时视为全新状态，所有文件将被重新扫描，此前的失败计数与处理成功时间记录将丢失。
 
 #### 2. 文件过滤配置迁移
 
@@ -61,9 +61,11 @@ include_patterns = ["*.mp4"]
 
 #### 3. Docker 用户
 
-需在 `docker-compose.yml` 中新增 `data` 卷挂载：
+镜像地址变更为 `ghcr.io/hexstan/mediaconveyor`，请更新 `docker-compose.yml` 中的 `image`，并新增 `data` 卷挂载：
 
 ```yaml
+image: ghcr.io/hexstan/mediaconveyor:latest
+
 volumes:
   - ./config:/app/config
   - ./data:/app/data      # 新增此行
@@ -72,36 +74,31 @@ volumes:
 
 ---
 
-## 旧版本号体系（v1.0.0 – v4.0.0）
-
-> **注**：项目版本号已于 2026-10 重置，自 `0.7.0-dev` 起采用新的版本号体系重新开始迭代。以下 v1.0.0 至 v4.0.0 为旧版本号体系下的历史记录，与当前版本体系不连续；对应的 Tag 与 GitHub Release 已一并清理归档。
-
----
-
 ## [4.0.0] - 2026-06-26
 
 ### 新增
 
-- `backup_dir` 现为可选项。当留空且 `remove_source = false` 时，源文件处理完成后保留在原位置不做移动。
+1. `backup_dir` 现为可选项。当留空且 `remove_source = false` 时，源文件处理完成后保留在原位置不做移动。
 
 ### 移除
 
-- **命令行参数**：`-c` / `--config`、`--log-dir`、`--state-file` 已移除。配置文件路径固定为 `config/config.toml`，状态文件路径固定为 `logs/state.json`。
-- **环境变量覆盖**：不再支持通过以下环境变量覆盖配置项：
-    - `VIDEOWATCHDOG_SCAN_INTERVAL`
-    - `VIDEOWATCHDOG_LOG_DIR`
-    - `VIDEOWATCHDOG_MAX_LOG_FILES`
-    - `VIDEOWATCHDOG_LOG_LEVEL`
-    - `VIDEOWATCHDOG_SOURCE_DIR`
-    - `VIDEOWATCHDOG_DEST_DIR`
-    - `VIDEOWATCHDOG_BACKUP_DIR`
-      所有配置现仅通过 `config/config.toml` 设置。
+1. **命令行参数**：`-c` / `--config`、`--log-dir`、`--state-file` 已移除。配置文件路径固定为 `config/config.toml`，状态文件路径固定为 `logs/state.json`。
+2. **环境变量覆盖**：不再支持通过以下环境变量覆盖配置项：
+   1. `VIDEOWATCHDOG_SCAN_INTERVAL`
+   2. `VIDEOWATCHDOG_LOG_DIR`
+   3. `VIDEOWATCHDOG_MAX_LOG_FILES`
+   4. `VIDEOWATCHDOG_LOG_LEVEL`
+   5. `VIDEOWATCHDOG_SOURCE_DIR`
+   6. `VIDEOWATCHDOG_DEST_DIR`
+   7. `VIDEOWATCHDOG_BACKUP_DIR`
+   
+   所有配置现仅通过 `config/config.toml` 设置。
 
 ### 破坏性变更
 
-- 命令行参数完全移除。此前通过 `-c`、`--log-dir`、`--state-file` 传参的启动方式不再有效。
-- 环境变量覆盖完全移除。此前通过 `VIDEOWATCHDOG_*` 环境变量覆盖配置的方式不再有效。
-- 状态文件内部 JSON 结构变更（扁平结构 → 分类结构）。v3.x 格式的状态文件在首次启动时视为空，此前的失败计数与处理成功时间记录将丢失。
+1. 命令行参数完全移除。此前通过 `-c`、`--log-dir`、`--state-file` 传参的启动方式不再有效。
+2. 环境变量覆盖完全移除。此前通过 `VIDEOWATCHDOG_*` 环境变量覆盖配置的方式不再有效。
+3. 状态文件内部 JSON 结构变更（扁平结构 → 分类结构）。v3.x 格式的状态文件在首次启动时视为空，此前的失败计数与处理成功时间记录将丢失。
 
 ### 迁移指南（v3.x -> v4.0.0）
 
@@ -152,45 +149,45 @@ source_dir = "/custom/source"
 
 ### 新增
 
-- 可配置的日志等级（`log_level`），支持 `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`。设置为 `DEBUG` 时会输出详细的文件跳过原因。
-- 文件过滤器（`[tasks.filter]`），支持按以下条件筛选文件：
-    - 文件大小（`size`），支持 `"1MB"` 等可读格式。
-    - 媒体时长（`duration`），支持 `"10s"`、`"30m"`、`"2h"` 等格式。
-    - 视频/音频/总比特率（`video_bitrate`、`audio_bitrate`、`total_bitrate`），支持 `"100K"`、`"10M"`、`"1MBPS"` 等格式。
-    - 帧率（`framerate`）。
-    - 视频短边分辨率（`short_side`）。
-    - 按编码器排除（`exclude_video_codecs`、`exclude_audio_codecs`），如 `["hevc", "av1"]`。
-- 直接移动格式（`direct_move_formats`），指定后缀的文件会跳过 FFmpeg 处理，直接从源目录移动到目标目录。
-- 源文件删除选项（`remove_source`），设置为 `true` 后处理成功直接删除源文件，不再保留备份。
-- 延迟删除选项（`source_expired_minutes`），配合 `remove_source` 使用，处理完成后保留源文件指定分钟数再删除。
-- 所有日志消息添加任务名称前缀（如 `【Task 1】`），便于多任务场景下区分。
-- 命令行参数支持：
-    - `-c` / `--config`：指定配置文件路径。
-    - `--log-dir`：覆盖日志目录。
-    - `--state-file`：覆盖状态文件路径。
-- 环境变量覆盖支持：
-    - `VIDEOWATCHDOG_SCAN_INTERVAL`、`VIDEOWATCHDOG_LOG_DIR`、`VIDEOWATCHDOG_MAX_LOG_FILES`、`VIDEOWATCHDOG_LOG_LEVEL`。
-    - `VIDEOWATCHDOG_SOURCE_DIR`、`VIDEOWATCHDOG_DEST_DIR`、`VIDEOWATCHDOG_BACKUP_DIR`。
-- Docker 多架构支持：通过 BtbN 静态构建分别支持 amd64 和 arm64。
-- 智能 ffprobe 优化：仅在过滤器需要媒体元数据时才调用 ffprobe，无需时长/比特率/编码器等条件时跳过，提升性能。
+1. 可配置的日志等级（`log_level`），支持 `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`。设置为 `DEBUG` 时会输出详细的文件跳过原因。
+2. 文件过滤器（`[tasks.filter]`），支持按以下条件筛选文件：
+   1. 文件大小（`size`），支持 `"1MB"` 等可读格式。
+   2. 媒体时长（`duration`），支持 `"10s"`、`"30m"`、`"2h"` 等格式。
+   3. 视频/音频/总比特率（`video_bitrate`、`audio_bitrate`、`total_bitrate`），支持 `"100K"`、`"10M"`、`"1MBPS"` 等格式。
+   4. 帧率（`framerate`）。
+   5. 视频短边分辨率（`short_side`）。
+   6. 按编码器排除（`exclude_video_codecs`、`exclude_audio_codecs`），如 `["hevc", "av1"]`。
+3. 直接移动格式（`direct_move_formats`），指定后缀的文件会跳过 FFmpeg 处理，直接从源目录移动到目标目录。
+4. 源文件删除选项（`remove_source`），设置为 `true` 后处理成功直接删除源文件，不再保留备份。
+5. 延迟删除选项（`source_expired_minutes`），配合 `remove_source` 使用，处理完成后保留源文件指定分钟数再删除。
+6. 所有日志消息添加任务名称前缀（如 `【Task 1】`），便于多任务场景下区分。
+7. 命令行参数支持：
+   1. `-c` / `--config`：指定配置文件路径。
+   2. `--log-dir`：覆盖日志目录。
+   3. `--state-file`：覆盖状态文件路径。
+8. 环境变量覆盖支持：
+   1. `VIDEOWATCHDOG_SCAN_INTERVAL`、`VIDEOWATCHDOG_LOG_DIR`、`VIDEOWATCHDOG_MAX_LOG_FILES`、`VIDEOWATCHDOG_LOG_LEVEL`。
+   2. `VIDEOWATCHDOG_SOURCE_DIR`、`VIDEOWATCHDOG_DEST_DIR`、`VIDEOWATCHDOG_BACKUP_DIR`。
+9. Docker 多架构支持：通过 BtbN 静态构建分别支持 amd64 和 arm64。
+10. 智能 ffprobe 优化：仅在过滤器需要媒体元数据时才调用 ffprobe，无需时长/比特率/编码器等条件时跳过，提升性能。
 
 ### 变更
 
-- 扫描间隔改为全局参数，所有任务共享同一个 `scan_interval` 计时周期。
-- 术语更新：日志和文档中将"转码"改为"处理"，"监控"改为"监听"。
-- Docker 镜像中的 FFmpeg 安装方式从 apt 改为下载 BtbN 静态构建。
-- Docker Compose 默认挂载路径从 `./input`/`./output`/`./processed` 改为 `./source`/`./dest`/`./backup`。
-- 状态文件内部格式变更，旧格式的状态文件首次启动时将被视为空。
+1. 扫描间隔改为全局参数，所有任务共享同一个 `scan_interval` 计时周期。
+2. 术语更新：日志和文档中将"转码"改为"处理"，"监控"改为"监听"。
+3. Docker 镜像中的 FFmpeg 安装方式从 apt 改为下载 BtbN 静态构建。
+4. Docker Compose 默认挂载路径从 `./input`/`./output`/`./processed` 改为 `./source`/`./dest`/`./backup`。
+5. 状态文件内部格式变更，旧格式的状态文件首次启动时将被视为空。
 
 ### 修复
 
-- 修复直接移动文件时仍进行媒体信息检查的问题。
-- 修复文档中 FFmpeg 的拼写错误。
+1. 修复直接移动文件时仍进行媒体信息检查的问题。
+2. 修复文档中 FFmpeg 的拼写错误。
 
 ### 移除
 
-- 移除 `suffix` 和 `output_format` 配置项，用户需通过 `ffmpeg_cmd` 中的 `{output}` 占位符自行构造完整输出文件名。
-- 移除 Docker Compose 中的 `restart: unless-stopped`，容器不再默认自动重启。
+1. 移除 `suffix` 和 `output_format` 配置项，用户需通过 `ffmpeg_cmd` 中的 `{output}` 占位符自行构造完整输出文件名。
+2. 移除 Docker Compose 中的 `restart: unless-stopped`，容器不再默认自动重启。
 
 ### 破坏性变更
 
@@ -225,12 +222,12 @@ source_dir = "/custom/source"
 
 ### 新增
 
-- 运行时每日日志轮转：程序运行期间跨天时自动切换到新的日志文件。
-- 运行时自动清理旧日志：跨天轮转时自动删除超过 `max_log_files` 数量的旧日志文件。此前清理仅在启动时执行。
+1. 运行时每日日志轮转：程序运行期间跨天时自动切换到新的日志文件。
+2. 运行时自动清理旧日志：跨天轮转时自动删除超过 `max_log_files` 数量的旧日志文件。此前清理仅在启动时执行。
 
 ### 变更
 
-- `.dockerignore` 新增排除 `.github` 目录，减少 Docker 构建上下文大小。
+1. `.dockerignore` 新增排除 `.github` 目录，减少 Docker 构建上下文大小。
 
 ---
 
@@ -244,19 +241,19 @@ source_dir = "/custom/source"
 
 ### 新增
 
-- FFmpeg 备用命令支持：当 FFmpeg 命令连续失败达到 `fallback_count` 次后，自动切换到 `ffmpeg_cmd_fallback` 执行。可用于主命令失败时降级为更兼容的编码参数。
+1. FFmpeg 备用命令支持：当 FFmpeg 命令连续失败达到 `fallback_count` 次后，自动切换到 `ffmpeg_cmd_fallback` 执行。可用于主命令失败时降级为更兼容的编码参数。
 
 ### 变更
 
-- 配置文件和示例模板从项目根目录移至 `config/` 子目录。
-- Docker Compose 挂载方式从单文件绑定改为整个 `config/` 目录挂载。
-- 配置键 `max_retries` 重命名为 `failure_count`，功能不变。
-- 示例配置中将第二个任务的 `processed_dir` 从 `./done2` 修正为 `./processed2`。
+1. 配置文件和示例模板从项目根目录移至 `config/` 子目录。
+2. Docker Compose 挂载方式从单文件绑定改为整个 `config/` 目录挂载。
+3. 配置键 `max_retries` 重命名为 `failure_count`，功能不变。
+4. 示例配置中将第二个任务的 `processed_dir` 从 `./done2` 修正为 `./processed2`。
 
 ### 修复
 
-- 移除了 FFmpeg 执行前冗余的目录创建操作，避免失败时产生空目录。
-- `.gitignore` 新增 `logs/` 目录，防止日志文件被误提交。
+1. 移除了 FFmpeg 执行前冗余的目录创建操作，避免失败时产生空目录。
+2. `.gitignore` 新增 `logs/` 目录，防止日志文件被误提交。
 
 ### 破坏性变更
 
@@ -276,22 +273,25 @@ source_dir = "/custom/source"
 
 ### 新增
 
-- 转码成功时日志中输出实际耗时信息。
+1. 转码成功时日志中输出实际耗时信息。
 
 ### 变更
 
-- 错误消息的详细信息现在换行显示，提升多行错误输出（如 FFmpeg 错误日志）的可读性。
+1. 错误消息的详细信息现在换行显示，提升多行错误输出（如 FFmpeg 错误日志）的可读性。
 
 ### 修复
 
-- 修复转码期间目标目录被外部删除后，移动源文件时程序崩溃的问题。现在会自动重建缺失的目录。
+1. 修复转码期间目标目录被外部删除后，移动源文件时程序崩溃的问题。现在会自动重建缺失的目录。
 
 ---
 
 ## [1.0.0] - 2026-03-17
 
-- 首次发布 Realease。
+1. 首次发布 Release。
 
+---
+
+[8.0.0]: https://github.com/HexStan/MediaConveyor/releases/tag/v8.0.0
 [4.0.0]: https://github.com/HexStan/MediaConveyor/releases/tag/v4.0.0
 [3.0.0]: https://github.com/HexStan/MediaConveyor/releases/tag/v3.0.0
 [2.0.2]: https://github.com/HexStan/MediaConveyor/releases/tag/v2.0.2
