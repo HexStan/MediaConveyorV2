@@ -49,7 +49,7 @@ runtime = [
     "croniter==6.2.4",
     "humanize==4.16.0",
     "psutil==7.2.2",
-    "pydantic==2.14.2",
+    "pydantic==2.14.3",
 ]
 # 开发与验证工具（运行时不需要，CI 的 typecheck / test job 安装本组，含 runtime）
 dev = [
