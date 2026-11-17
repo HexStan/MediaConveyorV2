@@ -46,10 +46,10 @@ Changelog = "https://github.com/HexStan/MediaConveyor/blob/master/CHANGELOG.md"
 [dependency-groups]
 # 运行依赖：客户端模式的全部第三方库（Docker 镜像只装本组）
 runtime = [
-    "croniter==6.2.4",
-    "humanize==4.16.0",
+    "croniter==7.0.0",
+    "humanize==4.17.0",
     "psutil==7.2.2",
-    "pydantic==2.14.2",
+    "pydantic==2.14.3",
 ]
 # 开发与验证工具（运行时不需要，CI 的 typecheck / test job 安装本组，含 runtime）
 dev = [
@@ -61,7 +61,7 @@ dev = [
     # Pyrefly 的版本策略见下方 [tool.pyrefly] 头部注释
     "pyrefly==1.4.0",
     # typeshed 官方存根：psutil / croniter 未自带 py.typed，补齐后参与类型检查
-    "types-psutil==7.2.2.20260906",
+    "types-psutil==7.2.2.20261111",
     "types-croniter==6.2.4.20261006",
     # humanize / pydantic 自带 py.typed
 ]
